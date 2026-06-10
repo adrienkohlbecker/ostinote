@@ -105,11 +105,11 @@ Injection only happens on fresh starts (`startup`/`clear`). Resumed and compacte
 
 ### Handoff notes (`/ostinote`)
 
-The automatic pipeline captures *what happened*; the handoff captures *what matters next*. Before ending a session (or when context is getting full), type `/ostinote` — installed as a skill in Claude Code and a custom prompt in Codex. The agent writes a short structured note (state / next steps / gotchas) to `ostinote.md` in your memory folder. The next session — from either agent — gets it injected, then the file is cleared: it's a one-shot briefing, not accumulating history.
+The automatic pipeline captures *what happened*; the handoff captures *what matters next*. Before ending a session — or before `/clear`-ing for a fresh start when context is getting full — type `/ostinote` — installed as a skill in Claude Code and a custom prompt in Codex. (Letting the agent auto-compact instead? The note keeps until the next fresh session: compaction continues the same session, so nothing is re-injected or consumed there.) The agent writes a short structured note (state / next steps / gotchas) to `ostinote.md` in your memory folder. The next session — from either agent — gets it injected, then the file is cleared: it's a one-shot briefing, not accumulating history.
 
 ### Identity (`identity.md`)
 
-Optional, written by you, never modified by the tool. If an `identity.md` file exists in your memory folder, its content is injected first in every session — use it to give your agent a persistent persona, values, or standing instructions that should survive across sessions and across agents. Example:
+Optional, written by you, never modified by the tool. If an `identity.md` file exists in your memory folder, its content is injected first in every fresh session — use it to give your agent a persistent persona, values, or standing instructions that should survive across sessions and across agents. Example:
 
 ```markdown
 # Identity
@@ -121,7 +121,7 @@ This differs from `CLAUDE.md`/`AGENTS.md`: those are per-agent and usually commi
 
 ### Core memories (`core-memories.md`)
 
-Yours to curate, never compressed. While the compression layers deliberately shed detail over time, anything in `core-memories.md` (in your memory folder) is injected verbatim in every session, forever. Use it for the handful of moments or facts that should never age out — a hard-won debugging lesson, a decision and its rationale. Tip: when something like that happens, just tell your agent "add this to core memories" — it knows the path from the session-start injection.
+Yours to curate, never compressed. While the compression layers deliberately shed detail over time, anything in `core-memories.md` (in your memory folder) is injected verbatim in every fresh session, forever. Use it for the handful of moments or facts that should never age out — a hard-won debugging lesson, a decision and its rationale. Tip: when something like that happens, just tell your agent "add this to core memories" — it knows the path from the session-start injection.
 
 The daily consolidation can also promote on its own: when a day's entries contain a clearly durable fact (a final decision, a gotcha that will bite again), it appends a dated one-liner. It's instructed to be very conservative — most days promote nothing — and it only ever appends; pruning the file stays yours.
 
