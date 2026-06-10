@@ -280,6 +280,20 @@ def test_install_uninstall_idempotent(tmp_path, monkeypatch):
     assert data.get("hooks", {}) == {}
 
 
+def test_install_claude_gets_session_end_codex_does_not(tmp_path, monkeypatch):
+    from ostinote import install as install_mod
+
+    monkeypatch.setattr(install_mod, "self_command", lambda: ["/usr/bin/ostinote"])
+    root = str(tmp_path)
+    install_mod.install("claude", "project", root)
+    claude = json.loads((tmp_path / ".claude" / "settings.json").read_text())
+    assert set(claude["hooks"]) == {"SessionStart", "PostToolUse", "SessionEnd"}
+
+    install_mod.install("codex", "project", root)
+    codex = json.loads((tmp_path / ".codex" / "hooks.json").read_text())
+    assert set(codex["hooks"]) == {"SessionStart", "PostToolUse"}
+
+
 def test_install_preserves_foreign_hooks(tmp_path, monkeypatch):
     from ostinote import install as install_mod
 

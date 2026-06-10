@@ -2,9 +2,9 @@
 
 Subcommands:
 
-    hook session-start|post-tool --agent claude|codex
+    hook session-start|post-tool|session-end --agent claude|codex
         Lifecycle hook entry points (read agent JSON on stdin, never fail).
-    save [--agent A] [--session ID] [--transcript PATH] [--force] [--dry]
+    save [--agent A] [--session ID] [--transcript PATH] [--force|--final] [--dry]
         Extract + summarize one session into now.md.
     consolidate
         Merge past-day staging files into recent.md / archive.md.
@@ -37,7 +37,7 @@ def main(argv=None) -> None:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_hook = sub.add_parser("hook", help="lifecycle hook entry points")
-    p_hook.add_argument("event", choices=["session-start", "post-tool"])
+    p_hook.add_argument("event", choices=["session-start", "post-tool", "session-end"])
     p_hook.add_argument("--agent", required=True, choices=agent_names())
 
     p_save = sub.add_parser("save", help="save a session into memory")
@@ -47,6 +47,11 @@ def main(argv=None) -> None:
     p_save.add_argument("--cwd", default=None)
     p_save.add_argument(
         "--force", action="store_true", help="bypass cooldown and min-message threshold"
+    )
+    p_save.add_argument(
+        "--final",
+        action="store_true",
+        help="end-of-session save: bypass cooldown, keep min-message threshold",
     )
     p_save.add_argument(
         "--dry", action="store_true", help="print the extract, skip the model call"
@@ -87,7 +92,13 @@ def main(argv=None) -> None:
         env = Env(args.cwd or os.getcwd())
         sys.exit(
             pipeline.run_save(
-                env, args.agent, args.session, args.transcript, args.force, args.dry
+                env,
+                args.agent,
+                args.session,
+                args.transcript,
+                args.force,
+                args.dry,
+                args.final,
             )
         )
     elif args.command == "consolidate":
@@ -110,6 +121,7 @@ def _run_hook(args) -> None:
     handlers = {
         "session-start": hooks_mod.session_start,
         "post-tool": hooks_mod.post_tool,
+        "session-end": hooks_mod.session_end,
     }
     try:
         handlers[args.event](args.agent)

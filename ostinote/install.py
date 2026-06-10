@@ -29,7 +29,18 @@ ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
 _EVENTS = {
     "SessionStart": "session-start",
     "PostToolUse": "post-tool",
+    "SessionEnd": "session-end",
 }
+# Codex has no session-exit hook event (its Stop event fires every turn);
+# recovery at next session start covers Codex session tails instead.
+_UNSUPPORTED = {"codex": ["SessionEnd"]}
+
+
+def _events_for(agent: str) -> dict:
+    events = dict(_EVENTS)
+    for event in _UNSUPPORTED.get(agent, []):
+        del events[event]
+    return events
 
 
 def _quote(part: str) -> str:
@@ -66,7 +77,7 @@ def _write_json(path: str, data: dict) -> None:
 
 def _update_hooks(settings: dict, agent: str, remove_only: bool = False) -> dict:
     hooks = settings.setdefault("hooks", {})
-    for event, subcommand in _EVENTS.items():
+    for event, subcommand in _events_for(agent).items():
         groups = hooks.get(event, [])
         # Strip our hooks from every matcher group, drop emptied groups.
         kept_groups = []

@@ -65,6 +65,7 @@ Under the hood, both agents expose the same hook system (Codex's hooks are Claud
 |---|---|
 | Session starts | Injects memory into context; rescues sessions that ended without a final save; kicks off daily consolidation if needed |
 | After tool calls | Once enough new conversation accumulates, saves a summary in the background |
+| Session ends (Claude) | Saves the session's final stretch in the background — the hook returns instantly, summarization finishes after the session is gone. Codex has no session-end hook event; recovery covers it instead |
 
 ## Features in detail
 
@@ -122,7 +123,7 @@ Optional, also yours to curate. While the compression layers deliberately shed d
 
 ### Recovery of missed sessions
 
-Saves are triggered by tool use, so a session that ends quietly (you close the terminal, the laptop sleeps, the agent crashes) can leave its last stretch of conversation uncaptured. Every session leaves a small bookkeeping record, and at the next session start `ostinote` checks for transcripts that grew after their last save, have been idle for at least 5 minutes (so live parallel sessions are left alone), and are less than a week old — and saves up to 3 of them in the background. Disable with `features.recovery: false`.
+Claude Code sessions get a final save from the session-end hook. But Codex has no session-end event, and any session can die without one (the laptop sleeps, the agent crashes, the machine shuts down mid-save). Every session leaves a small bookkeeping record, and at the next session start `ostinote` checks for transcripts that grew after their last save, have been idle for at least 5 minutes (so live parallel sessions are left alone), and are less than a week old — and saves up to 3 of them in the background. Disable with `features.recovery: false`.
 
 ### Parallel sessions, two agents, worktrees
 

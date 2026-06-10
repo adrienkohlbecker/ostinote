@@ -54,8 +54,14 @@ def run_save(
     transcript_path: str | None = None,
     force: bool = False,
     dry: bool = False,
+    final: bool = False,
 ) -> int:
-    """Save one session's new exchanges into now.md. Returns exit code."""
+    """Save one session's new exchanges into now.md. Returns exit code.
+
+    ``final`` (session just ended) skips the cooldown — staleness doesn't
+    apply — but keeps the min-human-messages gate, so closing a trivial
+    session doesn't burn a model call. ``force`` skips both.
+    """
     env.ensure_dirs()
     agent = get_agent(agent_name)
 
@@ -74,13 +80,13 @@ def run_save(
         return 0
 
     try:
-        return _save_locked(env, agent, session_id, transcript_path, force, dry)
+        return _save_locked(env, agent, session_id, transcript_path, force, dry, final)
     finally:
         lock.release()
 
 
 def _save_locked(
-    env: Env, agent, session_id: str, transcript_path: str, force: bool, dry: bool
+    env: Env, agent, session_id: str, transcript_path: str, force: bool, dry: bool, final: bool
 ) -> int:
     state = SessionState.load(env.sessions_dir, agent.name, session_id)
     state.transcript_path = transcript_path
@@ -88,7 +94,7 @@ def _save_locked(
     # --- Cooldown (per session) ---
     cooldown = env.cfg["cooldowns"]["save_seconds"]
     elapsed = time.time() - state.last_attempt_ts
-    if not force and not dry and elapsed < cooldown:
+    if not force and not final and not dry and elapsed < cooldown:
         if env.cfg["debug"]:
             env.log("cooldown", "%ds < %ds, skip (%s)" % (elapsed, cooldown, session_id))
         return 0

@@ -147,7 +147,8 @@ def session_start(agent_name: str) -> None:
         except OSError:
             pass
 
-    # Recovery: background-save sessions that ended without a final save.
+    # Recovery: background-save sessions that ended without a final save
+    # (Codex sessions, and crashes/sleeps that killed the SessionEnd save).
     if env.cfg["features"]["recovery"]:
         recovered = _recover_missed(env)
         if recovered:
@@ -205,6 +206,44 @@ def _recover_missed(env: Env) -> int:
             ],
         )
     return len(candidates[:_RECOVERY_MAX])
+
+
+# --- SessionEnd ----------------------------------------------------------------
+
+
+def session_end(agent_name: str) -> None:
+    """Queue a final save of the closing session (Claude only — Codex has no
+    session-exit event, so recovery handles its tails)."""
+    data = read_hook_input()
+    env = env_from_hook(data)
+
+    transcript_path = data.get("transcript_path") or ""
+    session_id = data.get("session_id") or ""
+    if not transcript_path or not os.path.exists(transcript_path):
+        return
+    if not session_id:
+        session_id = os.path.basename(transcript_path).rsplit(".", 1)[0]
+
+    state = SessionState.load(env.sessions_dir, agent_name, session_id)
+    if _count_lines(transcript_path) <= state.line:
+        return  # nothing new since the last save
+
+    env.log("hook", "session-end (%s): queueing final save of %s" % (agent_name, session_id))
+    spawn(
+        env,
+        [
+            "save",
+            "--agent",
+            agent_name,
+            "--session",
+            session_id,
+            "--transcript",
+            transcript_path,
+            "--cwd",
+            env.cwd,
+            "--final",
+        ],
+    )
 
 
 # --- PostToolUse ---------------------------------------------------------------
