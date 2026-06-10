@@ -351,24 +351,26 @@ def test_install_uninstall_idempotent(tmp_path, monkeypatch):
     assert data.get("hooks", {}) == {}
 
 
-def test_project_codex_install_leaves_global_prompt_untouched(tmp_path, monkeypatch):
+def test_skill_installed_per_agent_and_scope(tmp_path, monkeypatch):
     from ostinote import install as install_mod
 
     home = tmp_path / "home"
-    prompt = home / ".codex" / "prompts" / "ostinote.md"
-    prompt.parent.mkdir(parents=True)
-    prompt.write_text("global prompt\n")
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setattr(install_mod, "self_command", lambda: ["/usr/bin/ostinote"])
 
     root = str(tmp_path / "proj")
     report = install_mod.install("codex", "project", root)
-    assert "codex /ostinote prompt is user-scoped" in "\n".join(report)
-    assert prompt.read_text() == "global prompt\n"
-    assert not (tmp_path / "proj" / ".codex" / "prompts").exists()
+    skill = tmp_path / "proj" / ".agents" / "skills" / "ostinote" / "SKILL.md"
+    assert "codex $ostinote skill installed" in "\n".join(report)
+    assert skill.read_text().startswith("---")
 
     install_mod.install("codex", "project", root, remove=True)
-    assert prompt.read_text() == "global prompt\n"
+    assert not skill.exists()
+
+    install_mod.install("codex", "user", root)
+    assert (home / ".agents" / "skills" / "ostinote" / "SKILL.md").exists()
+    install_mod.install("claude", "user", root)
+    assert (home / ".claude" / "skills" / "ostinote" / "SKILL.md").exists()
 
 
 def test_install_session_end_events_per_agent(tmp_path, monkeypatch):

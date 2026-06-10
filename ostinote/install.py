@@ -11,9 +11,9 @@ Entries managed by this tool are recognized by their command string
 (contains ``ostinote`` and ``--agent``), making install/uninstall idempotent
 and safe alongside user-defined hooks.
 
-Also installs the ``/ostinote`` core-memory command where it can match the
-requested scope: a skill for Claude Code, and a user-scoped custom prompt for
-Codex.
+Also installs the ostinote core-memory command as a skill for both agents —
+the same ``SKILL.md``, invoked as ``/ostinote`` in Claude Code and
+``$ostinote`` in Codex (Codex deprecated custom prompts in favor of skills).
 """
 
 from __future__ import annotations
@@ -37,6 +37,11 @@ _EVENTS = {
 _AGENT_EVENTS = {
     "claude": {"SessionEnd": "session-end"},
     "codex": {"Stop": "session-end"},
+}
+# Where each agent looks for skills, and how the user invokes one.
+_SKILLS = {
+    "claude": (".claude", "/ostinote"),
+    "codex": (".agents", "$ostinote"),
 }
 
 
@@ -128,42 +133,22 @@ def install(agent: str, scope: str, project_root: str, remove: bool = False) -> 
         "%s hooks %s: %s" % (agent, "removed from" if remove else "registered in", path)
     )
 
-    # /ostinote core-memory command
-    if agent == "claude":
-        skill_dir = (
-            os.path.expanduser("~/.claude/skills/ostinote")
-            if scope == "user"
-            else os.path.join(project_root, ".claude", "skills", "ostinote")
-        )
-        target = os.path.join(skill_dir, "SKILL.md")
-        if remove:
-            if os.path.exists(target):
-                shutil.rmtree(skill_dir, ignore_errors=True)
-                report.append("claude /ostinote skill removed: %s" % skill_dir)
-        else:
-            os.makedirs(skill_dir, exist_ok=True)
-            shutil.copyfile(os.path.join(ASSETS_DIR, "SKILL.md"), target)
-            report.append("claude /ostinote skill installed: %s" % target)
+    # The ostinote core-memory command, as a skill (same file for both agents).
+    base, invoke = _SKILLS[agent]
+    skill_dir = (
+        os.path.join(os.path.expanduser("~"), base, "skills", "ostinote")
+        if scope == "user"
+        else os.path.join(project_root, base, "skills", "ostinote")
+    )
+    target = os.path.join(skill_dir, "SKILL.md")
+    if remove:
+        if os.path.exists(target):
+            shutil.rmtree(skill_dir, ignore_errors=True)
+            report.append("%s %s skill removed: %s" % (agent, invoke, skill_dir))
     else:
-        if scope != "user":
-            if remove:
-                report.append("codex /ostinote prompt is user-scoped; left unchanged")
-            else:
-                report.append(
-                    "codex /ostinote prompt is user-scoped; run "
-                    "`ostinote install codex --user` to install it"
-                )
-            report.extend(_warnings(agent, remove))
-            return report
-        target = os.path.expanduser("~/.codex/prompts/ostinote.md")
-        if remove:
-            if os.path.exists(target):
-                os.remove(target)
-                report.append("codex /ostinote prompt removed: %s" % target)
-        else:
-            os.makedirs(os.path.dirname(target), exist_ok=True)
-            shutil.copyfile(os.path.join(ASSETS_DIR, "codex-prompt.md"), target)
-            report.append("codex /ostinote prompt installed: %s" % target)
+        os.makedirs(skill_dir, exist_ok=True)
+        shutil.copyfile(os.path.join(ASSETS_DIR, "SKILL.md"), target)
+        report.append("%s %s skill installed: %s" % (agent, invoke, target))
 
     report.extend(_warnings(agent, remove))
     return report

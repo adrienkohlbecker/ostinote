@@ -126,11 +126,12 @@ def session_start(agent_name: str) -> None:
     sections: list[str] = []
 
     # Standing instructions: what memory exists and where.
+    command = "$ostinote" if agent_name == "codex" else "/ostinote"
     sections.append(
         "=== OSTINOTE ===\n"
         "Persistent memory in %s: now.md (session buffer), today-*.md (daily), "
         "recent.md (last 7d), archive.md (older), core-memories.md (key moments; "
-        "/ostinote appends to it). Search them on user request." % env.data_dir
+        "%s appends to it). Search them on user request." % (env.data_dir, command)
     )
 
     # Memory files, most specific first.

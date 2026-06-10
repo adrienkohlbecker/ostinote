@@ -37,7 +37,7 @@ Codex will ask you to trust the new hooks once on its next start. To stop using 
 - **Automatic capture.** While you work, new conversation is periodically summarized into one-line entries — no prompting, no copy-pasting.
 - **Memory on session start.** Every new session (Claude or Codex) begins with your project's memory injected: today's activity, the last 7 days, older history, and an optional identity file.
 - **One memory, every agent.** Both agents read and write the same per-project memory folder. Run five sessions in parallel across both tools — including in git worktrees — and they all feed the same memory without stepping on each other.
-- **Core memories on demand.** Type `/ostinote <what to remember>` and the agent appends it to `core-memories.md` — a dated one-liner that every future session (either agent) sees verbatim, forever.
+- **Core memories on demand.** Type `/ostinote <what to remember>` (`$ostinote` in Codex) and the agent appends it to `core-memories.md` — a dated one-liner that every future session (either agent) sees verbatim, forever.
 
 ## How it works
 
@@ -118,7 +118,7 @@ This differs from `CLAUDE.md`/`AGENTS.md`: those are per-agent and usually commi
 
 Yours to curate, never compressed. While the compression layers deliberately shed detail over time, anything in `core-memories.md` (in your memory folder) is injected verbatim in every fresh session, forever. Use it for the handful of moments or facts that should never age out — a hard-won debugging lesson, a decision and its rationale.
 
-When something like that happens, type `/ostinote <what to remember>` — installed as a skill in Claude Code and a custom prompt in Codex — and the agent appends it as a dated one-liner. With no argument, it distills the most durable lesson from the current session instead. Because the file is append-only and read by every session, this works the same from five parallel sessions across worktrees as it does from one.
+When something like that happens, type `/ostinote <what to remember>` (in Codex: `$ostinote`, since Codex invokes skills with a `$` prefix) — installed as the same skill in both agents — and the agent appends it as a dated one-liner. With no argument, it distills the most durable lesson from the current session instead. Because the file is append-only and read by every session, this works the same from five parallel sessions across worktrees as it does from one.
 
 The daily consolidation can also promote on its own: when a day's entries contain a clearly durable fact (a final decision, a gotcha that will bite again), it appends a dated one-liner. It's instructed to be very conservative — most days promote nothing — and it only ever appends; pruning the file stays yours.
 
