@@ -16,11 +16,6 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 
-# Haiku pricing (USD per token), fallback when the CLI omits total_cost_usd.
-_INPUT_PRICE = 0.80 / 1_000_000
-_OUTPUT_PRICE = 4.00 / 1_000_000
-_CACHE_PRICE = 0.08 / 1_000_000
-
 DEFAULT_COMMAND = [
     "claude",
     "-p",
@@ -154,7 +149,6 @@ def _extract_tokens(data: dict) -> TokenUsage:
     tk_cache = (
         usage.get("cache_read_input_tokens", 0) or data.get("cache_read_input_tokens", 0) or 0
     )
-    cost = data.get("total_cost_usd") or (
-        (tk_in - tk_cache) * _INPUT_PRICE + tk_out * _OUTPUT_PRICE + tk_cache * _CACHE_PRICE
-    )
+    # Cost only when the engine reports it — no fallback price table to rot.
+    cost = data.get("total_cost_usd") or 0.0
     return TokenUsage(input=tk_in, output=tk_out, cache=tk_cache, cost_usd=cost)

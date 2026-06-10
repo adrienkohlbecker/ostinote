@@ -147,9 +147,10 @@ class Env:
     def log_tokens(
         self, component: str, tk_in: int, tk_out: int, tk_cache: int, cost: float
     ) -> None:
-        self.log(
-            component, "tokens: %d+%dcache→%dout ($%.6f)" % (tk_in, tk_cache, tk_out, cost)
-        )
+        detail = "tokens: %d+%dcache→%dout" % (tk_in, tk_cache, tk_out)
+        if cost:
+            detail += " ($%.6f)" % cost
+        self.log(component, detail)
 
     def rotate_logs(self) -> None:
         """Delete daily logs older than 30 days; cap background.log size."""
