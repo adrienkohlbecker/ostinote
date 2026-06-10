@@ -16,9 +16,8 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.14"
-      - run: uv pip install --system -e '.[dev]'
-      - run: ruff check --output-format=github .
-      - run: ruff format --check .
+      - run: uv run --extra dev ruff check --output-format=github .
+      - run: uv run --extra dev ruff format --check .
 
   test:
     name: test (${{ matrix.os }}, py${{ matrix.python }})
@@ -36,5 +35,4 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: ${{ matrix.python }}
-      - run: uv pip install --system -e '.[dev]'
-      - run: pytest -q
+      - run: uv run --extra dev pytest -q
