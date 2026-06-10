@@ -1,0 +1,44 @@
+name: Bug report
+description: Something isn't working as documented
+labels: [bug]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+    validations:
+      required: true
+  - type: dropdown
+    id: agent
+    attributes:
+      label: Which agent(s)
+      multiple: true
+      options:
+        - Claude Code
+        - Codex CLI
+        - Other / N/A
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: >
+        From `.ostinote/logs/memory-<date>.log` and
+        `.ostinote/logs/hook-errors.log`. Redact anything sensitive.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: Versions
+      placeholder: "ostinote commit, OS, Python, claude CLI version"
+    validations:
+      required: true

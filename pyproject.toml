@@ -1,0 +1,42 @@
+[project]
+name = "ostinote"
+version = "1.0.0"
+description = "Continuous memory for coding agents — Claude Code and Codex CLI, one shared memory"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+
+[project.scripts]
+ostinote = "ostinote.cli:main"
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["ostinote*"]
+
+[tool.setuptools.package-data]
+ostinote = ["prompts/*.txt", "assets/*"]
+
+[tool.ruff]
+target-version = "py39"
+line-length = 95
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # import sorting
+    "B",   # bugbear
+    "UP",  # pyupgrade
+]
+ignore = [
+    "UP031",  # printf-style formatting — used deliberately throughout
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,23 @@
+Condense the coding session below into a single journal entry.
+
+Output exactly two lines and nothing else:
+
+## {{TIME}} | {{BRANCH}}
+<one sentence describing the work>
+
+Constraints:
+- Reproduce the header line `## {{TIME}} | {{BRANCH}}` character for character. The time and branch were measured by the calling program; never substitute your own values, even if earlier entries look malformed.
+- One sentence. Name the concrete artifacts the session touched: file names, branches, issue/MR/PR identifiers, error messages.
+- Write telegraphically. A future agent reading this journal pays per token, so abbreviate wherever the short form is unambiguous to a language model and cut words that carry no information. Every fact must survive; only the padding goes.
+- Plain text only: no code fences, no commentary before or after the entry.
+- Compare against the previous journal entry shown below. If this session adds nothing beyond what that entry already records, reply with the single word SKIP instead of an entry.
+
+Previous journal entry (context only — do not restate it):
+---
+{{LAST_ENTRY}}
+---
+
+Session transcript extract:
+---
+{{EXTRACT}}
+---

@@ -1,0 +1,48 @@
+You are performing scheduled maintenance on a coding agent's long-term memory. All material is inline below; you have no file access. Your job is reorganization and compression — every statement you output must trace back to a statement in the input. Never invent.
+
+## Materials
+
+Daily staging logs awaiting consolidation:
+{{STAGING_FILES}}
+
+recent.md as it stands:
+{{RECENT}}
+
+archive.md as it stands:
+{{ARCHIVE}}
+
+## Tasks
+
+### 1. Fold each staging log into recent.md
+
+Each staging file becomes one dated entry appended after the existing recent.md content:
+
+## YYYY-MM-DD
+Two to four sentences: what shipped, what was decided, how project state moved. Omit play-by-play, individual file paths, and tool noise.
+
+### 2. Age recent.md into archive.md
+
+Move every recent.md entry more than 3 days old into archive.md, merging entries that fall in the same Monday-to-Sunday week under:
+
+## Week of YYYY-MM-DD
+Three to five sentences per week: lasting conventions, infrastructure shifts, major deliverables. Day-level detail does not belong here. Remove what you moved from recent.md.
+
+## Reply format
+
+Emit exactly the sections below — no other text, no explanations.
+
+===RECENT===
+# Recent
+
+<updated recent.md>
+
+===ARCHIVE===
+# Archive
+
+<updated archive.md>
+
+## Constraints
+
+- Keep the `# Recent` and `# Archive` title lines.
+- Budget roughly 600 tokens for the recent section and 400 for the archive section.
+- Phrase tersely, using common developer abbreviations; keep every fact, drop only padding.

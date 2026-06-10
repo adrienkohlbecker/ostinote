@@ -1,0 +1,18 @@
+Rewrite the day log below in as few tokens as possible with zero information loss.
+
+What must survive:
+- Every fact, identifier, decision, outcome, and cause-effect link.
+- Each entry's `## time | branch` header line.
+- Chronological order, oldest first.
+
+What to cut:
+- Function words and connectors a language-model reader can infer (articles, most prepositions, prose glue).
+- Long words that have standard short forms ("repo", "conf", "impl", "env", "deps", and the like).
+- Redundancy across entries: when several entries chronicle the same piece of work, collapse them into one entry whose header spans the time range (e.g. `## 14:05-15:30 | branch`). This is where most of the savings come from.
+
+Style: developer shorthand, not prose. Fold supporting detail into parentheses ("install.py (tomllib, UTF-8)"); chain independent facts with semicolons.
+
+Reply with only the rewritten log — no preamble, no commentary.
+
+Day log:
+{{NOW_CONTENT}}

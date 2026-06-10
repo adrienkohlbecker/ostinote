@@ -1,0 +1,95 @@
+"""Claude Code transcript adapter.
+
+Claude Code stores sessions as JSONL under
+``~/.claude/projects/<cwd-slug>/<session-id>.jsonl``. Each line is a message
+object; we keep user/assistant messages, drop metadata and injected
+system-reminder content, and condense tool_use blocks into short markers.
+"""
+
+from __future__ import annotations
+
+import glob
+import json
+import os
+import re
+
+from .base import Agent, Message
+
+_SKIP_MARKERS = ("<system-reminder>", "<command-name>", "<local-command")
+
+
+class ClaudeAgent(Agent):
+    name = "claude"
+
+    def parse(self, transcript_path: str, skip_lines: int = 0) -> tuple[list[Message], int]:
+        messages: list[Message] = []
+        total = 0
+        try:
+            f = open(transcript_path, encoding="utf-8", errors="replace")
+        except OSError:
+            return messages, 0
+
+        with f:
+            for line_num, line in enumerate(f):
+                total = line_num + 1
+                if line_num < skip_lines:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                if obj.get("type") not in ("user", "assistant") or obj.get("isMeta"):
+                    continue
+
+                texts = _extract_texts(obj.get("message", {}).get("content", ""))
+                if texts:
+                    role = "HUMAN" if obj["type"] == "user" else "AGENT"
+                    messages.append((role, "\n".join(texts)))
+
+        return messages, total
+
+    def find_latest_transcript(self, cwd: str) -> str | None:
+        # Claude Code slugs the session directory from the project path; on
+        # Windows it lowercases the drive letter (D:\proj -> d--proj).
+        if os.name == "nt" and re.match(r"^[A-Za-z]:", cwd):
+            cwd = cwd[0].lower() + cwd[1:]
+        slug = re.sub(r"[^a-zA-Z0-9]", "-", cwd)
+        sdir = os.path.expanduser(os.path.join("~/.claude/projects", slug))
+        files = glob.glob(os.path.join(sdir, "*.jsonl"))
+        return max(files, key=os.path.getmtime) if files else None
+
+
+def _extract_texts(content) -> list[str]:
+    texts: list[str] = []
+    if isinstance(content, str):
+        if any(m in content for m in _SKIP_MARKERS):
+            return texts
+        stripped = content.strip()
+        if stripped:
+            texts.append(stripped)
+    elif isinstance(content, list):
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            btype = block.get("type", "")
+            if btype == "text":
+                text = block.get("text", "").strip()
+                if text and not any(m in text for m in _SKIP_MARKERS):
+                    texts.append(text)
+            elif btype == "tool_use":
+                texts.append(_format_tool_use(block))
+    return texts
+
+
+def _format_tool_use(block: dict) -> str:
+    name = block.get("name", "?")
+    inp = block.get("input", {}) or {}
+    if name in ("Edit", "Read", "Write", "NotebookEdit"):
+        filename = str(inp.get("file_path", "?")).rsplit("/", 1)[-1]
+        return "[TOOL: %s %s]" % (name, filename)
+    if name == "Bash":
+        return "[TOOL: Bash `%s`]" % Agent._truncate(str(inp.get("command", "?")))
+    if name in ("Grep", "Glob"):
+        return "[TOOL: %s '%s']" % (name, inp.get("pattern", "?"))
+    return "[TOOL: %s]" % name

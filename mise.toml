@@ -1,0 +1,51 @@
+[tools]
+python = "3.14"
+uv = "0.11.16"
+
+[env]
+# Auto-create and activate .venv so `pytest` / `ostinote` resolve to the
+# project venv (the venv's `ostinote` shadows the uv-tool global install
+# while inside this directory — handy for testing changes before `mise run
+# install` refreshes the global one).
+_.python.venv = { path = ".venv", create = true }
+
+[tasks.setup]
+description = "Install the package editable with dev deps into .venv"
+run = "uv pip install -e '.[dev]'"
+
+[tasks.test]
+description = "Run the pytest suite"
+run = 'pytest -q "$@"'
+
+[tasks.lint]
+description = "Check lint and formatting (what CI runs)"
+run = ["ruff check .", "ruff format --check ."]
+
+[tasks.fix]
+description = "Auto-fix lint findings and reformat"
+run = ["ruff check --fix .", "ruff format ."]
+
+[tasks.install]
+description = "(Re)install the global `ostinote` CLI from this checkout (editable)"
+run = "uv tool install --editable . --force"
+
+[tasks.uninstall]
+description = "Remove the global `ostinote` CLI"
+run = "uv tool uninstall ostinote"
+
+[tasks.status]
+description = "Show memory state for this project"
+run = 'ostinote status "$@"'
+
+# Parser debugging: print what the extractor sees, no model call, no writes.
+[tasks."dry:claude"]
+description = "Dry-run extraction of the latest Claude session for this project"
+run = 'ostinote save --dry --agent claude "$@"'
+
+[tasks."dry:codex"]
+description = "Dry-run extraction of the latest Codex session for this project"
+run = 'ostinote save --dry --agent codex "$@"'
+
+[tasks.consolidate]
+description = "Force consolidation of past-day staging files into recent/archive"
+run = "ostinote consolidate"
