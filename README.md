@@ -101,6 +101,8 @@ Every new session begins with a `=== MEMORY ===` block injected into the agent's
 
 It also tells the agent where to write its next handoff note, so `/ostinote` works without any setup.
 
+Injection only happens on fresh starts (`startup`/`clear`). Resumed and compacted sessions saw the memory already — both agents report how the session started via the hook's `source` field, and ostinote skips re-injection (and keeps the handoff intact) for `resume` and `compact`.
+
 ### Handoff notes (`/ostinote`)
 
 The automatic pipeline captures *what happened*; the handoff captures *what matters next*. Before ending a session (or when context is getting full), type `/ostinote` — installed as a skill in Claude Code and a custom prompt in Codex. The agent writes a short structured note (state / next steps / gotchas) to `ostinote.md` in your memory folder. The next session — from either agent — gets it injected, then the file is cleared: it's a one-shot briefing, not accumulating history.

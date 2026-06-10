@@ -385,6 +385,43 @@ def test_install_claude_gets_session_end_codex_does_not(tmp_path, monkeypatch):
     assert set(codex["hooks"]) == {"SessionStart", "PostToolUse"}
 
 
+@pytest.mark.parametrize(
+    "source,injected",
+    [("startup", True), ("clear", True), ("", True), ("resume", False), ("compact", False)],
+)
+def test_session_start_source_filter(tmp_path, monkeypatch, capsys, source, injected):
+    import io
+
+    from ostinote import hooks as hooks_mod
+
+    monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", str(tmp_path / "no-user.json"))
+    proj = tmp_path / "proj"
+    (proj / ".ostinote").mkdir(parents=True)
+    (proj / ".ostinote" / "config.json").write_text(
+        json.dumps(
+            {
+                "data_dir": str(tmp_path / "data"),
+                "share_worktrees": False,
+                "features": {"recovery": False, "consolidation": False},
+            }
+        )
+    )
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "recent.md").write_text("# Recent\n\nsomething happened\n")
+
+    payload = {"cwd": str(proj)}
+    if source:
+        payload["source"] = source
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(payload)))
+    hooks_mod.session_start("claude")
+    out = capsys.readouterr().out
+    if injected:
+        assert "=== MEMORY ===" in out
+        assert "something happened" in out
+    else:
+        assert out == ""
+
+
 def test_install_preserves_foreign_hooks(tmp_path, monkeypatch):
     from ostinote import install as install_mod
 

@@ -102,7 +102,26 @@ def session_start(agent_name: str) -> None:
     data = read_hook_input()
     env = env_from_hook(data)
     env.ensure_dirs()
-    env.log("hook", "session-start (%s): root=%s" % (agent_name, env.project_root))
+    source = data.get("source") or "startup"
+    env.log("hook", "session-start (%s, %s): root=%s" % (agent_name, source, env.project_root))
+
+    # Recovery: background-save sessions that ended without a final save
+    # (crashes/sleeps that killed the session-end save).
+    if env.cfg["features"]["recovery"]:
+        recovered = _recover_missed(env)
+        if recovered:
+            env.log("hook", "recovery: %d session(s) queued" % recovered)
+
+    # Consolidation of past-day staging files (silent — the agent can't act
+    # on it, and session start is when injected context is already largest).
+    if env.cfg["features"]["consolidation"] and staging_files(env):
+        env.log("hook", "consolidation queued: %d staging file(s)" % len(staging_files(env)))
+        spawn(env, ["consolidate", "--cwd", env.cwd])
+
+    # A resumed or compacted session already saw the memory once — injecting
+    # it again would duplicate context (and eat the handoff a second time).
+    if source in ("resume", "compact"):
+        return
 
     sections: list[str] = []
 
@@ -146,19 +165,6 @@ def session_start(agent_name: str) -> None:
                     pass
         except OSError:
             pass
-
-    # Recovery: background-save sessions that ended without a final save
-    # (Codex sessions, and crashes/sleeps that killed the SessionEnd save).
-    if env.cfg["features"]["recovery"]:
-        recovered = _recover_missed(env)
-        if recovered:
-            env.log("hook", "recovery: %d session(s) queued" % recovered)
-
-    # Consolidation of past-day staging files (silent — the agent can't act
-    # on it, and session start is when injected context is already largest).
-    if env.cfg["features"]["consolidation"] and staging_files(env):
-        env.log("hook", "consolidation queued: %d staging file(s)" % len(staging_files(env)))
-        spawn(env, ["consolidate", "--cwd", env.cwd])
 
     emit(agent_name, "SessionStart", "\n\n".join(sections))
 
