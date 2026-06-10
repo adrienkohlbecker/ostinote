@@ -50,7 +50,10 @@ class SessionState:
 
     def save(self) -> None:
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
-        tmp = self.path + ".tmp"
+        # Per-pid tmp name: a hook and a background save may write the same
+        # session state concurrently; a shared tmp path makes one of them
+        # crash when the other's os.replace consumes it. Last writer wins.
+        tmp = "%s.%d.tmp" % (self.path, os.getpid())
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(
                 {
