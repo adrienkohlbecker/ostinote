@@ -153,14 +153,10 @@ def session_start(agent_name: str) -> None:
         if recovered:
             env.log("hook", "recovery: %d session(s) queued" % recovered)
 
-    # Consolidation of past-day staging files.
+    # Consolidation of past-day staging files (silent — the agent can't act
+    # on it, and session start is when injected context is already largest).
     if env.cfg["features"]["consolidation"] and staging_files(env):
-        n = len(staging_files(env))
-        sections.append(
-            "=== MEMORY CONSOLIDATION ===\n"
-            "%d day(s) of memory to compress. "
-            "Consolidation running in background." % n
-        )
+        env.log("hook", "consolidation queued: %d staging file(s)" % len(staging_files(env)))
         spawn(env, ["consolidate", "--cwd", env.cwd])
 
     emit(agent_name, "SessionStart", "\n\n".join(sections))
