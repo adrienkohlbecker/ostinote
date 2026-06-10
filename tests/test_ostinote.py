@@ -351,6 +351,26 @@ def test_install_uninstall_idempotent(tmp_path, monkeypatch):
     assert data.get("hooks", {}) == {}
 
 
+def test_project_codex_install_leaves_global_prompt_untouched(tmp_path, monkeypatch):
+    from ostinote import install as install_mod
+
+    home = tmp_path / "home"
+    prompt = home / ".codex" / "prompts" / "ostinote.md"
+    prompt.parent.mkdir(parents=True)
+    prompt.write_text("global prompt\n")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(install_mod, "self_command", lambda: ["/usr/bin/ostinote"])
+
+    root = str(tmp_path / "proj")
+    report = install_mod.install("codex", "project", root)
+    assert "codex /ostinote prompt is user-scoped" in "\n".join(report)
+    assert prompt.read_text() == "global prompt\n"
+    assert not (tmp_path / "proj" / ".codex" / "prompts").exists()
+
+    install_mod.install("codex", "project", root, remove=True)
+    assert prompt.read_text() == "global prompt\n"
+
+
 def test_install_claude_gets_session_end_codex_does_not(tmp_path, monkeypatch):
     from ostinote import install as install_mod
 

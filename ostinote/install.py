@@ -11,8 +11,9 @@ Entries managed by this tool are recognized by their command string
 (contains ``ostinote`` and ``--agent``), making install/uninstall idempotent
 and safe alongside user-defined hooks.
 
-Also installs the ``/ostinote`` handoff command: a skill for Claude Code,
-a custom prompt for Codex.
+Also installs the ``/ostinote`` handoff command where it can match the
+requested scope: a skill for Claude Code, and a user-scoped custom prompt for
+Codex.
 """
 
 from __future__ import annotations
@@ -144,6 +145,16 @@ def install(agent: str, scope: str, project_root: str, remove: bool = False) -> 
             shutil.copyfile(os.path.join(ASSETS_DIR, "SKILL.md"), target)
             report.append("claude /ostinote skill installed: %s" % target)
     else:
+        if scope != "user":
+            if remove:
+                report.append("codex /ostinote prompt is user-scoped; left unchanged")
+            else:
+                report.append(
+                    "codex /ostinote prompt is user-scoped; run "
+                    "`ostinote install codex --user` to install it"
+                )
+            report.extend(_warnings(agent, remove))
+            return report
         target = os.path.expanduser("~/.codex/prompts/ostinote.md")
         if remove:
             if os.path.exists(target):
