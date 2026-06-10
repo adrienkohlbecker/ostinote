@@ -65,7 +65,7 @@ Under the hood, both agents expose the same hook system (Codex's hooks are Claud
 |---|---|
 | Session starts | Injects memory into context; rescues sessions that ended without a final save; kicks off daily consolidation if needed |
 | After tool calls | Once enough new conversation accumulates, saves a summary in the background |
-| Session ends (Claude) | Saves the session's final stretch in the background — the hook returns instantly, summarization finishes after the session is gone. Codex has no session-end hook event; recovery covers it instead |
+| Session ends (Claude) / turn ends (Codex) | Saves anything not yet captured, in the background — the hook returns instantly, summarization finishes on its own. Codex has no session-end event, so its turn-end `Stop` hook stands in: every turn end is treated as a potential session end (free when nothing new happened) |
 
 ## Features in detail
 
@@ -127,7 +127,7 @@ The daily consolidation can also promote on its own: when a day's entries contai
 
 ### Recovery of missed sessions
 
-Claude Code sessions get a final save from the session-end hook. But Codex has no session-end event, and any session can die without one (the laptop sleeps, the agent crashes, the machine shuts down mid-save). Every session leaves a small bookkeeping record, and at the next session start `ostinote` checks for transcripts that grew after their last save, have been idle for at least 5 minutes (so live parallel sessions are left alone), and are less than a week old — and saves up to 3 of them in the background. Disable with `features.recovery: false`.
+Claude Code sessions get a final save from the session-end hook, and Codex sessions from the turn-end save. But any session can still die without one (the laptop sleeps mid-turn, the agent crashes, the machine shuts down mid-save). Every session leaves a small bookkeeping record, and at the next session start `ostinote` checks for transcripts that grew after their last save, have been idle for at least 5 minutes (so live parallel sessions are left alone), and are less than a week old — and saves up to 3 of them in the background. Disable with `features.recovery: false`.
 
 ### Parallel sessions, two agents, worktrees
 

@@ -340,11 +340,11 @@ def test_install_uninstall_idempotent(tmp_path, monkeypatch):
     install_mod.install("codex", "project", root)  # idempotent
     hooks_file = tmp_path / ".codex" / "hooks.json"
     data = json.loads(hooks_file.read_text())
-    for event in ("SessionStart", "PostToolUse"):
+    for event in ("SessionStart", "PostToolUse", "Stop"):
         ours = [h for g in data["hooks"][event] for h in g["hooks"]]
         assert len(ours) == 1
         assert "--agent codex" in ours[0]["command"]
-    assert set(data["hooks"]) == {"SessionStart", "PostToolUse"}
+    assert set(data["hooks"]) == {"SessionStart", "PostToolUse", "Stop"}
 
     install_mod.install("codex", "project", root, remove=True)
     data = json.loads(hooks_file.read_text())
@@ -371,7 +371,7 @@ def test_project_codex_install_leaves_global_prompt_untouched(tmp_path, monkeypa
     assert prompt.read_text() == "global prompt\n"
 
 
-def test_install_claude_gets_session_end_codex_does_not(tmp_path, monkeypatch):
+def test_install_session_end_events_per_agent(tmp_path, monkeypatch):
     from ostinote import install as install_mod
 
     monkeypatch.setattr(install_mod, "self_command", lambda: ["/usr/bin/ostinote"])
@@ -380,9 +380,12 @@ def test_install_claude_gets_session_end_codex_does_not(tmp_path, monkeypatch):
     claude = json.loads((tmp_path / ".claude" / "settings.json").read_text())
     assert set(claude["hooks"]) == {"SessionStart", "PostToolUse", "SessionEnd"}
 
+    # Codex has no SessionEnd; its turn-scoped Stop maps to the same handler.
     install_mod.install("codex", "project", root)
     codex = json.loads((tmp_path / ".codex" / "hooks.json").read_text())
-    assert set(codex["hooks"]) == {"SessionStart", "PostToolUse"}
+    assert set(codex["hooks"]) == {"SessionStart", "PostToolUse", "Stop"}
+    stop = [h["command"] for g in codex["hooks"]["Stop"] for h in g["hooks"]]
+    assert "hook session-end --agent codex" in stop[0]
 
 
 @pytest.mark.parametrize(

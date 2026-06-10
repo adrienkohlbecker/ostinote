@@ -218,8 +218,14 @@ def _recover_missed(env: Env) -> int:
 
 
 def session_end(agent_name: str) -> None:
-    """Queue a final save of the closing session (Claude only — Codex has no
-    session-exit event, so recovery handles its tails)."""
+    """Queue a final save of anything not yet captured.
+
+    Fired by Claude's SessionEnd, and by Codex's turn-scoped Stop — Codex
+    has no session-exit event, so every turn end is treated as a potential
+    session end. Cheap when nothing is new; the --final save keeps the
+    min-human-messages gate, so it costs a model call at most once per few
+    exchanges.
+    """
     data = read_hook_input()
     env = env_from_hook(data)
 

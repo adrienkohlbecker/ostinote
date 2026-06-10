@@ -30,18 +30,18 @@ ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
 _EVENTS = {
     "SessionStart": "session-start",
     "PostToolUse": "post-tool",
-    "SessionEnd": "session-end",
 }
-# Codex has no session-exit hook event (its Stop event fires every turn);
-# recovery at next session start covers Codex session tails instead.
-_UNSUPPORTED = {"codex": ["SessionEnd"]}
+# Codex has no session-exit hook event, so its turn-scoped Stop stands in:
+# every turn end is treated as a potential session end (cheap when nothing
+# new happened).
+_AGENT_EVENTS = {
+    "claude": {"SessionEnd": "session-end"},
+    "codex": {"Stop": "session-end"},
+}
 
 
 def _events_for(agent: str) -> dict:
-    events = dict(_EVENTS)
-    for event in _UNSUPPORTED.get(agent, []):
-        del events[event]
-    return events
+    return {**_EVENTS, **_AGENT_EVENTS.get(agent, {})}
 
 
 def _quote(part: str) -> str:
