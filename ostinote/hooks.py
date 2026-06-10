@@ -166,9 +166,9 @@ def session_start(agent_name: str) -> None:
 def _recover_missed(env: Env) -> int:
     """Queue --force saves for transcripts with unsaved content.
 
-    A session is recoverable when its transcript still exists, was modified
-    after the last successful save attempt, and has been idle long enough
-    that it's not an active parallel session.
+    A session is recoverable when its transcript still exists, has content
+    beyond the saved line marker, and has been idle long enough that it's not
+    an active parallel session.
     """
     now = time.time()
     candidates = []
@@ -180,7 +180,7 @@ def _recover_missed(env: Env) -> int:
             mtime = os.path.getmtime(path)
         except OSError:
             continue
-        if mtime <= state.last_attempt_ts:
+        if _count_lines(path) <= state.line:
             continue
         if now - mtime < _RECOVERY_ACTIVE_WINDOW:
             continue  # probably a live parallel session

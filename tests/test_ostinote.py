@@ -1,4 +1,6 @@
 import json
+import os
+import time
 
 import pytest
 
@@ -258,6 +260,52 @@ def test_pid_lock_stale_takeover(tmp_path):
     with open(path, "w") as f:
         f.write("999999999")  # certainly dead
     assert PidLock(path).acquire()
+
+
+def test_recovery_uses_saved_line_not_failed_attempt_time(tmp_path, monkeypatch):
+    from ostinote import hooks
+
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text("{}\n{}\n{}\n")
+    idle_mtime = time.time() - hooks._RECOVERY_ACTIVE_WINDOW - 1
+    os.utime(transcript, (idle_mtime, idle_mtime))
+
+    sessions = tmp_path / "sessions"
+    state = SessionState.load(str(sessions), "codex", "session")
+    state.transcript_path = str(transcript)
+    state.line = 1
+    state.last_attempt_ts = time.time()
+    state.save()
+
+    queued = []
+    env = type("EnvStub", (), {"sessions_dir": str(sessions), "cwd": str(tmp_path)})()
+    monkeypatch.setattr(hooks, "spawn", lambda _env, args: queued.append(args))
+
+    assert hooks._recover_missed(env) == 1
+    assert queued
+    assert "--force" in queued[0]
+
+
+def test_recovery_skips_fully_saved_transcripts(tmp_path, monkeypatch):
+    from ostinote import hooks
+
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text("{}\n{}\n")
+    idle_mtime = time.time() - hooks._RECOVERY_ACTIVE_WINDOW - 1
+    os.utime(transcript, (idle_mtime, idle_mtime))
+
+    sessions = tmp_path / "sessions"
+    state = SessionState.load(str(sessions), "codex", "session")
+    state.transcript_path = str(transcript)
+    state.line = 2
+    state.save()
+
+    queued = []
+    env = type("EnvStub", (), {"sessions_dir": str(sessions), "cwd": str(tmp_path)})()
+    monkeypatch.setattr(hooks, "spawn", lambda _env, args: queued.append(args))
+
+    assert hooks._recover_missed(env) == 0
+    assert queued == []
 
 
 # --- Config ---------------------------------------------------------------------------
