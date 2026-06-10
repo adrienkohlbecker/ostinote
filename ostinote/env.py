@@ -25,7 +25,10 @@ from . import tzutil
 
 
 def _slugify(path: str) -> str:
-    return re.sub(r"[^a-zA-Z0-9]", "-", path).strip("-")
+    # Same scheme as Claude Code's ~/.claude/projects/<slug> and
+    # claude-remember's ~/.remember/<slug>, leading dash included, so
+    # external-mode memory folders carry over between the tools by name.
+    return re.sub(r"[^a-zA-Z0-9]", "-", path)
 
 
 def _git_main_root(cwd: str) -> str:

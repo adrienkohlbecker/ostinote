@@ -55,6 +55,25 @@ DEFAULTS: dict = {
 
 USER_CONFIG_PATH = os.path.expanduser("~/.ostinote/config.json")
 
+# claude-remember's names for settings ostinote renamed, accepted in any
+# config layer so old config files keep working as-is. A file that also sets
+# the new name keeps the new name's value.
+LEGACY_KEYS = {
+    ("cooldowns", "ndc_seconds"): ("cooldowns", "compress_seconds"),
+    ("features", "ndc_compression"): ("features", "hourly_compression"),
+}
+
+
+def _normalize_legacy(cfg: dict) -> dict:
+    for (old_section, old_key), (new_section, new_key) in LEGACY_KEYS.items():
+        section = cfg.get(old_section)
+        if isinstance(section, dict) and old_key in section:
+            value = section.pop(old_key)
+            new = cfg.setdefault(new_section, {})
+            if isinstance(new, dict):
+                new.setdefault(new_key, value)
+    return cfg
+
 
 def _merge(base: dict, override: dict) -> dict:
     out = copy.deepcopy(base)
@@ -76,6 +95,7 @@ def _read_json(path: str) -> dict:
 
 
 def load(project_root: str) -> dict:
-    cfg = _merge(DEFAULTS, _read_json(USER_CONFIG_PATH))
-    cfg = _merge(cfg, _read_json(os.path.join(project_root, ".ostinote", "config.json")))
+    cfg = _merge(DEFAULTS, _normalize_legacy(_read_json(USER_CONFIG_PATH)))
+    project = _read_json(os.path.join(project_root, ".ostinote", "config.json"))
+    cfg = _merge(cfg, _normalize_legacy(project))
     return cfg

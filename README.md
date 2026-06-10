@@ -28,7 +28,7 @@ By default your memory lives **outside** your repos, in `~/.ostinote/projects/<p
 
 Codex will ask you to trust the new hooks once on its next start. To stop using it: `ostinote uninstall all`.
 
-> **Migrating from the `remember` Claude Code marketplace plugin?** Disable it first (`/plugin`), or both will save the same sessions twice. The on-disk formats are identical, so its old in-repo `.remember/` folders keep working — point ostinote at them per project with `"data_dir": ".remember"`, or copy their contents into `~/.ostinote/projects/<slug>/`.
+> **Migrating from the `remember` Claude Code marketplace plugin?** Disable it first (`/plugin`), or both will save the same sessions twice. The on-disk formats, project slugs, and config keys are all compatible: old in-repo `.remember/` folders keep working with `"data_dir": ".remember"`, external-mode trees keep working with `"data_dir": "~/.remember/{slug}"` (same folder names), or copy their contents into `~/.ostinote/projects/<slug>/`. Old config files can be reused as-is — renamed keys like `ndc_seconds` and `ndc_compression` are still understood.
 
 **Requirements:** Python 3.9+ and the `claude` CLI (used for summarization, with Haiku). Works on macOS and Linux; Windows is supported in the code (no bash needed) but hasn't seen real-world testing yet.
 

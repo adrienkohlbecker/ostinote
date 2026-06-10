@@ -333,8 +333,37 @@ def test_data_dir_slug_placeholder(tmp_path, monkeypatch):
     env = Env(str(proj))
     import re
 
-    expected_slug = re.sub(r"[^a-zA-Z0-9]", "-", str(proj)).strip("-")
+    # claude-remember / Claude Code slug scheme: leading dash kept
+    expected_slug = re.sub(r"[^a-zA-Z0-9]", "-", str(proj))
+    assert expected_slug.startswith("-")
     assert env.data_dir == str(store / expected_slug)
+
+
+def test_config_legacy_remember_keys(tmp_path, monkeypatch):
+    monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", str(tmp_path / "user.json"))
+    (tmp_path / "user.json").write_text(
+        json.dumps(
+            {
+                "cooldowns": {"ndc_seconds": 1800, "git_backup_seconds": 900},
+                "features": {"ndc_compression": False},
+            }
+        )
+    )
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    cfg = config_mod.load(str(proj))
+    assert cfg["cooldowns"]["compress_seconds"] == 1800
+    assert "ndc_seconds" not in cfg["cooldowns"]
+    assert cfg["features"]["hourly_compression"] is False
+    assert "ndc_compression" not in cfg["features"]
+
+    # a file that sets both names keeps the new name's value
+    (proj / ".ostinote").mkdir()
+    (proj / ".ostinote" / "config.json").write_text(
+        json.dumps({"cooldowns": {"ndc_seconds": 60, "compress_seconds": 7200}})
+    )
+    cfg = config_mod.load(str(proj))
+    assert cfg["cooldowns"]["compress_seconds"] == 7200
 
 
 def test_install_cleans_legacy_user_prompt_hook(tmp_path, monkeypatch):
