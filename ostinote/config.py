@@ -13,11 +13,13 @@ import json
 import os
 
 DEFAULTS: dict = {
-    # Where memory files live, relative to the project root (absolute paths
-    # and ~ are honored). A "{slug}" placeholder expands to the project
-    # path with non-alphanumerics dashed, so an absolute user-level setting
-    # like "~/.ostinote/projects/{slug}" stays per-project.
-    "data_dir": ".ostinote",
+    # Where memory files live. Absolute paths and ~ are honored; a relative
+    # value is resolved against the project root. The "{slug}" placeholder
+    # expands to the project path with non-alphanumerics dashed, so the
+    # default keeps every project's memory in your home directory (out of the
+    # repo, so it never shows up in diffs or the agent's review UI) while
+    # staying per-project. Set "data_dir": ".ostinote" to store it in-repo.
+    "data_dir": "~/.ostinote/projects/{slug}",
     # IANA timezone name for timestamps and daily file boundaries.
     # Empty = system local zone (never silently UTC).
     "timezone": "",

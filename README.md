@@ -21,12 +21,14 @@ uv tool install --editable /path/to/this/repo
 ostinote install claude
 ostinote install codex
 
-# 3. Done. Work normally — memory accumulates in <project>/.ostinote/
+# 3. Done. Work normally — memory accumulates in ~/.ostinote/projects/<project-slug>/
 ```
+
+By default your memory lives **outside** your repos, in `~/.ostinote/projects/<project-slug>/` (one folder per project) — so it never shows up in your repo's diffs or your agent's review UI. Prefer it in-repo? Set `"data_dir": ".ostinote"` (see [Configuration](#configuration)).
 
 Codex will ask you to trust the new hooks once on its next start. To stop using it: `ostinote uninstall all`.
 
-> **Migrating from the `remember` Claude Code marketplace plugin?** Disable it first (`/plugin`), or both will save the same sessions twice. The on-disk formats are identical, so to carry over its memory either rename the old `.remember/` folder to `.ostinote/`, or keep using the old folder by setting `"data_dir": ".remember"` in your config.
+> **Migrating from the `remember` Claude Code marketplace plugin?** Disable it first (`/plugin`), or both will save the same sessions twice. The on-disk formats are identical, so its old in-repo `.remember/` folders keep working — point ostinote at them per project with `"data_dir": ".remember"`, or copy their contents into `~/.ostinote/projects/<slug>/`.
 
 **Requirements:** Python 3.9+ and the `claude` CLI (used for summarization, with Haiku). Works on macOS and Linux; Windows is supported in the code (no bash needed) but hasn't seen real-world testing yet.
 
@@ -34,7 +36,7 @@ Codex will ask you to trust the new hooks once on its next start. To stop using 
 
 - **Automatic capture.** While you work, new conversation is periodically summarized into one-line entries — no prompting, no copy-pasting.
 - **Memory on session start.** Every new session (Claude or Codex) begins with your project's memory injected: today's activity, the last 7 days, older history, and an optional identity file.
-- **One memory, every agent.** Both agents read and write the same files in `<project>/.ostinote/`. Run five sessions in parallel across both tools — including in git worktrees — and they all feed the same memory without stepping on each other.
+- **One memory, every agent.** Both agents read and write the same per-project memory folder. Run five sessions in parallel across both tools — including in git worktrees — and they all feed the same memory without stepping on each other.
 - **Handoff notes.** Type `/ostinote` before ending a session and the agent writes a short "here's where I left off" note that the next session (either agent) picks up and clears.
 
 ## How it works
@@ -100,11 +102,11 @@ It also tells the agent where to write its next handoff note, so `/ostinote` wor
 
 ### Handoff notes (`/ostinote`)
 
-The automatic pipeline captures *what happened*; the handoff captures *what matters next*. Before ending a session (or when context is getting full), type `/ostinote` — installed as a skill in Claude Code and a custom prompt in Codex. The agent writes a short structured note (state / next steps / gotchas) to `.ostinote/ostinote.md`. The next session — from either agent — gets it injected, then the file is cleared: it's a one-shot briefing, not accumulating history.
+The automatic pipeline captures *what happened*; the handoff captures *what matters next*. Before ending a session (or when context is getting full), type `/ostinote` — installed as a skill in Claude Code and a custom prompt in Codex. The agent writes a short structured note (state / next steps / gotchas) to `ostinote.md` in your memory folder. The next session — from either agent — gets it injected, then the file is cleared: it's a one-shot briefing, not accumulating history.
 
 ### Identity (`identity.md`)
 
-Optional, written by you, never modified by the tool. If `.ostinote/identity.md` exists, its content is injected first in every session — use it to give your agent a persistent persona, values, or standing instructions that should survive across sessions and across agents. Example:
+Optional, written by you, never modified by the tool. If an `identity.md` file exists in your memory folder, its content is injected first in every session — use it to give your agent a persistent persona, values, or standing instructions that should survive across sessions and across agents. Example:
 
 ```markdown
 # Identity
@@ -112,11 +114,11 @@ You are the long-running maintainer of this homelab. You prefer boring,
 debuggable solutions; you treat the operator as the on-call.
 ```
 
-This differs from `CLAUDE.md`/`AGENTS.md`: those are per-agent and usually committed to the repo; `identity.md` is agent-neutral, private (the data directory is git-ignored), and travels with the memory.
+This differs from `CLAUDE.md`/`AGENTS.md`: those are per-agent and usually committed to the repo; `identity.md` is agent-neutral, private (the data directory lives outside the repo by default), and travels with the memory.
 
 ### Core memories (`core-memories.md`)
 
-Optional, also yours to curate. While the compression layers deliberately shed detail over time, anything you put in `.ostinote/core-memories.md` is injected verbatim in every session, forever. Use it for the handful of moments or facts that should never be compressed away — a hard-won debugging lesson, a decision and its rationale. Tip: when something like that happens, just tell your agent "add this to core memories" — it knows the path from the session-start injection.
+Optional, also yours to curate. While the compression layers deliberately shed detail over time, anything you put in `core-memories.md` (in your memory folder) is injected verbatim in every session, forever. Use it for the handful of moments or facts that should never be compressed away — a hard-won debugging lesson, a decision and its rationale. Tip: when something like that happens, just tell your agent "add this to core memories" — it knows the path from the session-start injection.
 
 ### Recovery of missed sessions
 
@@ -124,7 +126,7 @@ Saves are triggered by tool use, so a session that ends quietly (you close the t
 
 ### Parallel sessions, two agents, worktrees
 
-Everything is built for concurrency: each session tracks its own resume position in `.ostinote/state/sessions/`, writes to the shared memory files are serialized by an atomic lock, and save cooldowns are per-session. So you can run Claude Code and Codex side by side — or several of each — and they'll all feed one memory without duplicate or interleaved entries. Sessions started inside a git worktree write to the main checkout's memory by default (`share_worktrees`), so a fix made in a worktree is remembered in the main checkout tomorrow.
+Everything is built for concurrency: each session tracks its own resume position in the memory folder's `state/sessions/`, writes to the shared memory files are serialized by an atomic lock, and save cooldowns are per-session. So you can run Claude Code and Codex side by side — or several of each — and they'll all feed one memory without duplicate or interleaved entries. Sessions started inside a git worktree write to the main checkout's memory by default (`share_worktrees`), so a fix made in a worktree is remembered in the main checkout tomorrow.
 
 ## Everyday commands
 
@@ -141,7 +143,7 @@ For development there are mise tasks: `mise run test`, `mise run lint`, `mise ru
 
 ## The memory files
 
-Everything lives in `<project>/.ostinote/` (created automatically, ignored by git):
+Everything lives in your per-project memory folder — by default `~/.ostinote/projects/<project-slug>/`, created automatically (or `<project>/.ostinote/` if you set `data_dir` to a relative path):
 
 | File | What it is |
 |---|---|
@@ -168,7 +170,7 @@ Optional. Create `~/.ostinote/config.json` (applies everywhere) or `<project>/.o
 
 | Setting | Default | What it does |
 |---|---|---|
-| `data_dir` | `.ostinote` | Where memory lives. Supports `{slug}` for keeping memory outside your repos: `"~/.ostinote/projects/{slug}"` gives each project its own folder under your home directory |
+| `data_dir` | `~/.ostinote/projects/{slug}` | Where memory lives. `{slug}` expands to the project's path (non-alphanumerics dashed). The default keeps memory in your home directory, out of every repo. Set a relative value like `".ostinote"` to store it in-repo instead. (Per-project *config* is always read from `<project>/.ostinote/config.json`, wherever the data lives.) |
 | `timezone` | system local | IANA zone name (e.g. `America/New_York`) for timestamps and day boundaries — set it on servers whose clock is UTC |
 | `time_format` | `24h` | `24h` or `12h` timestamps |
 | `share_worktrees` | `true` | Sessions in git worktrees share the main checkout's memory |
