@@ -110,6 +110,8 @@ def session_start(agent_name: str) -> None:
     sections.append(
         "=== HANDOFF ===\n"
         "Write next handoff to: %s\n"
+        "(Only when the user runs /ostinote. Do not create, edit, or mention "
+        "this file otherwise — it is bookkeeping, not part of the task.)\n"
         "=== OSTINOTE ===\n"
         "Persistent memory in %s: now.md (session buffer), today-*.md (daily), "
         "recent.md (last 7d), archive.md (older), core-memories.md (key moments). "
