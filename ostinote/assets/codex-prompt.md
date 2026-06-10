@@ -1,31 +1,21 @@
 ---
-description: Save session state for clean continuation next session.
+description: Append a core memory — a fact that should never age out.
 ---
 
-Write a handoff note so the next session can continue cleanly. Use your knowledge of the current session — you were here. Write in first person ("I").
+Append a core memory to this project's persistent memory. Core memories are injected verbatim at the start of every fresh session, forever — they are for facts that must never age out: a final decision and its rationale, a hard-won gotcha that will bite again, a standing preference.
 
-Path: the file named on the `Write next handoff to:` line of the `=== HANDOFF ===` section injected at session start. If that line is absent, use `<project root>/.ostinote/ostinote.md`. Overwrite the file.
+User input (may be empty): $ARGUMENTS
 
-Format:
+What to save: if the user input above is non-empty, that is the memory — tighten it, don't change its meaning. If it is empty, distill the most durable lesson or decision from the current session (usually one; never more than two). If nothing qualifies, say so and write nothing.
+
+Where: `core-memories.md` in the memory folder named on the `Persistent memory in ...` line of the `=== OSTINOTE ===` section injected at session start. If that section isn't in context, run `ostinote status` and use the `data dir` it prints.
+
+Format: append one dated one-liner per memory:
 
 ```
-# Handoff
-
-## State
-{What's done, what's not. Files, PRs, decisions. 2-4 lines max.}
-
-## Next
-{What to pick up. Priority order. 1-3 items.}
-
-## Context
-{Non-obvious gotchas, blockers, preferences from this session. Skip if nothing.}
+- YYYY-MM-DD: {the fact, in one line}
 ```
 
-Rules:
+Keep all existing content of the file, and skip anything it already covers. If the file doesn't exist, create it starting with a `# Core Memories` heading and a blank line.
 
-- Under 20 lines total
-- Specific: file paths, PR numbers, branch names
-- Forward-looking — the next session doesn't care about the journey
-- If nothing meaningful to hand off, write: "No active work."
-
-Say "Saved." when done — nothing else.
+Confirm by echoing the line(s) you appended — nothing else.

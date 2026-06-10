@@ -11,7 +11,7 @@ Entries managed by this tool are recognized by their command string
 (contains ``ostinote`` and ``--agent``), making install/uninstall idempotent
 and safe alongside user-defined hooks.
 
-Also installs the ``/ostinote`` handoff command where it can match the
+Also installs the ``/ostinote`` core-memory command where it can match the
 requested scope: a skill for Claude Code, and a user-scoped custom prompt for
 Codex.
 """
@@ -128,7 +128,7 @@ def install(agent: str, scope: str, project_root: str, remove: bool = False) -> 
         "%s hooks %s: %s" % (agent, "removed from" if remove else "registered in", path)
     )
 
-    # /ostinote handoff command
+    # /ostinote core-memory command
     if agent == "claude":
         skill_dir = (
             os.path.expanduser("~/.claude/skills/ostinote")

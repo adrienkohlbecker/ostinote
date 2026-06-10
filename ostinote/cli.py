@@ -170,7 +170,6 @@ def _status(env: Env) -> None:
     for path in (
         env.identity_file,
         env.core_memories_file,
-        env.handoff_file,
         env.today_file(),
         env.now_file,
         env.recent_file,

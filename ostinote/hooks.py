@@ -119,29 +119,24 @@ def session_start(agent_name: str) -> None:
         spawn(env, ["consolidate", "--cwd", env.cwd])
 
     # A resumed or compacted session already saw the memory once — injecting
-    # it again would duplicate context (and eat the handoff a second time).
+    # it again would duplicate context.
     if source in ("resume", "compact"):
         return
 
     sections: list[str] = []
 
-    # Standing instructions: where the handoff goes, what history exists.
+    # Standing instructions: what memory exists and where.
     sections.append(
-        "=== HANDOFF ===\n"
-        "Write next handoff to: %s\n"
-        "(Only when the user runs /ostinote. Do not create, edit, or mention "
-        "this file otherwise — it is bookkeeping, not part of the task.)\n"
         "=== OSTINOTE ===\n"
         "Persistent memory in %s: now.md (session buffer), today-*.md (daily), "
-        "recent.md (last 7d), archive.md (older), core-memories.md (key moments). "
-        "Search them on user request." % (env.handoff_file, env.data_dir)
+        "recent.md (last 7d), archive.md (older), core-memories.md (key moments; "
+        "/ostinote appends to it). Search them on user request." % env.data_dir
     )
 
     # Memory files, most specific first.
     memory_files = [
         env.identity_file,
         env.core_memories_file,
-        env.handoff_file,
         env.today_file(),
         env.now_file,
         env.recent_file,
@@ -158,13 +153,6 @@ def session_start(agent_name: str) -> None:
             blocks.append("--- %s ---\n%s" % (os.path.basename(path), content))
     if blocks:
         sections.append("=== MEMORY ===\n" + "\n\n".join(blocks))
-        # The handoff is a one-shot briefing: consume it after injection.
-        try:
-            if os.path.getsize(env.handoff_file) > 0:
-                with open(env.handoff_file, "w", encoding="utf-8"):
-                    pass
-        except OSError:
-            pass
 
     emit(agent_name, "SessionStart", "\n\n".join(sections))
 

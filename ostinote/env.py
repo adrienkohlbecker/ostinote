@@ -7,7 +7,7 @@ config, and owns the data-directory layout:
 
     <data>/
         now.md  today-YYYY-MM-DD.md  recent.md  archive.md
-        ostinote.md (handoff)  identity.md  core-memories.md
+        identity.md  core-memories.md
         state/sessions/<agent>--<session>.json   per-session positions
         state/*.lock  state/last-compress.ts
         logs/memory-YYYY-MM-DD.log
@@ -103,10 +103,6 @@ class Env:
     @property
     def archive_file(self) -> str:
         return os.path.join(self.data_dir, "archive.md")
-
-    @property
-    def handoff_file(self) -> str:
-        return os.path.join(self.data_dir, "ostinote.md")
 
     @property
     def identity_file(self) -> str:

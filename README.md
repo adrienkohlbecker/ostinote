@@ -37,7 +37,7 @@ Codex will ask you to trust the new hooks once on its next start. To stop using 
 - **Automatic capture.** While you work, new conversation is periodically summarized into one-line entries — no prompting, no copy-pasting.
 - **Memory on session start.** Every new session (Claude or Codex) begins with your project's memory injected: today's activity, the last 7 days, older history, and an optional identity file.
 - **One memory, every agent.** Both agents read and write the same per-project memory folder. Run five sessions in parallel across both tools — including in git worktrees — and they all feed the same memory without stepping on each other.
-- **Handoff notes.** Type `/ostinote` before ending a session and the agent writes a short "here's where I left off" note that the next session (either agent) picks up and clears.
+- **Core memories on demand.** Type `/ostinote <what to remember>` and the agent appends it to `core-memories.md` — a dated one-liner that every future session (either agent) sees verbatim, forever.
 
 ## How it works
 
@@ -94,18 +94,13 @@ Every new session begins with a `=== MEMORY ===` block injected into the agent's
 
 1. `identity.md` — who the agent is (see below)
 2. `core-memories.md` — key moments (see below)
-3. `ostinote.md` — the handoff note from the last session
-4. `today-<date>.md` and `now.md` — what happened today
-5. `recent.md` — the last ~7 days
-6. `archive.md` — everything older
+3. `today-<date>.md` and `now.md` — what happened today
+4. `recent.md` — the last ~7 days
+5. `archive.md` — everything older
 
-It also tells the agent where to write its next handoff note, so `/ostinote` works without any setup.
+It also tells the agent where the memory folder lives, so `/ostinote` and "search your memory" requests work without any setup.
 
-Injection only happens on fresh starts (`startup`/`clear`). Resumed and compacted sessions saw the memory already — both agents report how the session started via the hook's `source` field, and ostinote skips re-injection (and keeps the handoff intact) for `resume` and `compact`.
-
-### Handoff notes (`/ostinote`)
-
-The automatic pipeline captures *what happened*; the handoff captures *what matters next*. Before ending a session — or before `/clear`-ing for a fresh start when context is getting full — type `/ostinote` — installed as a skill in Claude Code and a custom prompt in Codex. (Letting the agent auto-compact instead? The note keeps until the next fresh session: compaction continues the same session, so nothing is re-injected or consumed there.) The agent writes a short structured note (state / next steps / gotchas) to `ostinote.md` in your memory folder. The next session — from either agent — gets it injected, then the file is cleared: it's a one-shot briefing, not accumulating history.
+Injection only happens on fresh starts (`startup`/`clear`). Resumed and compacted sessions saw the memory already — both agents report how the session started via the hook's `source` field, and ostinote skips re-injection for `resume` and `compact`.
 
 ### Identity (`identity.md`)
 
@@ -119,9 +114,11 @@ debuggable solutions; you treat the operator as the on-call.
 
 This differs from `CLAUDE.md`/`AGENTS.md`: those are per-agent and usually committed to the repo; `identity.md` is agent-neutral, private (the data directory lives outside the repo by default), and travels with the memory.
 
-### Core memories (`core-memories.md`)
+### Core memories (`core-memories.md` and `/ostinote`)
 
-Yours to curate, never compressed. While the compression layers deliberately shed detail over time, anything in `core-memories.md` (in your memory folder) is injected verbatim in every fresh session, forever. Use it for the handful of moments or facts that should never age out — a hard-won debugging lesson, a decision and its rationale. Tip: when something like that happens, just tell your agent "add this to core memories" — it knows the path from the session-start injection.
+Yours to curate, never compressed. While the compression layers deliberately shed detail over time, anything in `core-memories.md` (in your memory folder) is injected verbatim in every fresh session, forever. Use it for the handful of moments or facts that should never age out — a hard-won debugging lesson, a decision and its rationale.
+
+When something like that happens, type `/ostinote <what to remember>` — installed as a skill in Claude Code and a custom prompt in Codex — and the agent appends it as a dated one-liner. With no argument, it distills the most durable lesson from the current session instead. Because the file is append-only and read by every session, this works the same from five parallel sessions across worktrees as it does from one.
 
 The daily consolidation can also promote on its own: when a day's entries contain a clearly durable fact (a final decision, a gotcha that will bite again), it appends a dated one-liner. It's instructed to be very conservative — most days promote nothing — and it only ever appends; pruning the file stays yours.
 
@@ -158,9 +155,8 @@ Everything lives in your per-project memory folder — by default `~/.ostinote/p
 | `today-*.md` | One file per day of compressed history |
 | `recent.md` | The last ~7 days |
 | `archive.md` | Older history |
-| `ostinote.md` | The handoff note written by `/ostinote` (read once, then cleared) |
 | `identity.md` | Optional — who your agent is. Write this yourself; it's injected first |
-| `core-memories.md` | Optional — key moments worth keeping verbatim |
+| `core-memories.md` | Optional — key moments worth keeping verbatim, appended by `/ostinote` |
 | `state/`, `logs/` | Bookkeeping: per-session positions, locks, pipeline logs |
 
 ## Configuration
