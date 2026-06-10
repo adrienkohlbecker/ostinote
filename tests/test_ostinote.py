@@ -273,7 +273,7 @@ def test_install_uninstall_idempotent(tmp_path, monkeypatch):
         ours = [h for g in data["hooks"][event] for h in g["hooks"]]
         assert len(ours) == 1
         assert "--agent codex" in ours[0]["command"]
-    assert "UserPromptSubmit" not in data["hooks"]
+    assert set(data["hooks"]) == {"SessionStart", "PostToolUse"}
 
     install_mod.install("codex", "project", root, remove=True)
     data = json.loads(hooks_file.read_text())
@@ -364,37 +364,6 @@ def test_config_legacy_remember_keys(tmp_path, monkeypatch):
     )
     cfg = config_mod.load(str(proj))
     assert cfg["cooldowns"]["compress_seconds"] == 7200
-
-
-def test_install_cleans_legacy_user_prompt_hook(tmp_path, monkeypatch):
-    from ostinote import install as install_mod
-
-    monkeypatch.setattr(install_mod, "self_command", lambda: ["/usr/bin/ostinote"])
-    root = str(tmp_path)
-    hooks_file = tmp_path / ".codex" / "hooks.json"
-    hooks_file.parent.mkdir()
-    hooks_file.write_text(
-        json.dumps(
-            {
-                "hooks": {
-                    "UserPromptSubmit": [
-                        {
-                            "hooks": [
-                                {
-                                    "type": "command",
-                                    "command": "/usr/bin/ostinote hook"
-                                    " user-prompt --agent codex",
-                                }
-                            ]
-                        }
-                    ]
-                }
-            }
-        )
-    )
-    install_mod.install("codex", "project", root)
-    data = json.loads(hooks_file.read_text())
-    assert "UserPromptSubmit" not in data["hooks"]
 
 
 def test_summarizer_never_persists_sessions(monkeypatch):

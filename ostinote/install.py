@@ -30,9 +30,6 @@ _EVENTS = {
     "SessionStart": "session-start",
     "PostToolUse": "post-tool",
 }
-# Events we registered in past versions: still cleaned on install/uninstall,
-# never re-added.
-_LEGACY_EVENTS = ["UserPromptSubmit"]
 
 
 def _quote(part: str) -> str:
@@ -69,9 +66,7 @@ def _write_json(path: str, data: dict) -> None:
 
 def _update_hooks(settings: dict, agent: str, remove_only: bool = False) -> dict:
     hooks = settings.setdefault("hooks", {})
-    managed = dict(_EVENTS)
-    managed.update({event: None for event in _LEGACY_EVENTS})
-    for event, subcommand in managed.items():
+    for event, subcommand in _EVENTS.items():
         groups = hooks.get(event, [])
         # Strip our hooks from every matcher group, drop emptied groups.
         kept_groups = []
@@ -81,7 +76,7 @@ def _update_hooks(settings: dict, agent: str, remove_only: bool = False) -> dict
                 group = dict(group)
                 group["hooks"] = inner
                 kept_groups.append(group)
-        if not remove_only and subcommand is not None:
+        if not remove_only:
             kept_groups.append(
                 {"hooks": [{"type": "command", "command": _command_str(subcommand, agent)}]}
             )
