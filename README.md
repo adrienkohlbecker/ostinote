@@ -119,7 +119,9 @@ This differs from `CLAUDE.md`/`AGENTS.md`: those are per-agent and usually commi
 
 ### Core memories (`core-memories.md`)
 
-Optional, also yours to curate. While the compression layers deliberately shed detail over time, anything you put in `core-memories.md` (in your memory folder) is injected verbatim in every session, forever. Use it for the handful of moments or facts that should never be compressed away — a hard-won debugging lesson, a decision and its rationale. Tip: when something like that happens, just tell your agent "add this to core memories" — it knows the path from the session-start injection.
+Yours to curate, never compressed. While the compression layers deliberately shed detail over time, anything in `core-memories.md` (in your memory folder) is injected verbatim in every session, forever. Use it for the handful of moments or facts that should never age out — a hard-won debugging lesson, a decision and its rationale. Tip: when something like that happens, just tell your agent "add this to core memories" — it knows the path from the session-start injection.
+
+The daily consolidation can also promote on its own: when a day's entries contain a clearly durable fact (a final decision, a gotcha that will bite again), it appends a dated one-liner. It's instructed to be very conservative — most days promote nothing — and it only ever appends; pruning the file stays yours.
 
 ### Recovery of missed sessions
 

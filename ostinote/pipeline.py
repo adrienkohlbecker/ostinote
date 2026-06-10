@@ -261,6 +261,7 @@ def run_consolidation(env: Env) -> int:
 
         recent = _read_or_empty(env.recent_file)
         archive = _read_or_empty(env.archive_file)
+        core = _read_or_empty(env.core_memories_file)
 
         env.log("consolidation", "start: %d staging file(s)" % len(contents))
         cfg = dict(env.cfg)
@@ -268,13 +269,13 @@ def run_consolidation(env: Env) -> int:
         cfg["summarizer"]["timeout"] = max(180, cfg["summarizer"]["timeout"])
         try:
             result = summarize.call_model(
-                prompts.build_consolidation_prompt(contents, recent, archive), cfg
+                prompts.build_consolidation_prompt(contents, recent, archive, core), cfg
             )
         except RuntimeError as e:
             env.log("consolidation", "ERROR: %s" % e)
             return 1
 
-        new_recent, new_archive = parse_consolidation_response(result.text)
+        new_recent, new_archive, new_core = parse_consolidation_response(result.text)
         if not new_recent:
             env.log("consolidation", "ERROR: empty recent section, aborting")
             return 1
@@ -282,6 +283,9 @@ def run_consolidation(env: Env) -> int:
         _write(env.recent_file, new_recent + "\n")
         if new_archive:
             _write(env.archive_file, new_archive + "\n")
+        if new_core:
+            _append_core(env.core_memories_file, new_core)
+            env.log("consolidation", "core memories promoted: %s" % new_core.splitlines()[0])
         env.log_tokens(
             "consolidation",
             result.tokens.input,
@@ -300,24 +304,35 @@ def run_consolidation(env: Env) -> int:
 
 
 def parse_consolidation_response(text: str):
-    """Split the model response on ===RECENT=== / ===ARCHIVE=== markers."""
+    """Split the model response on ===RECENT=== / ===ARCHIVE=== / ===CORE===
+    markers. CORE is optional and holds only NEW items to append."""
     text = _strip_fences(text)
-    recent, archive = "", ""
-    if "===RECENT===" in text and "===ARCHIVE===" in text:
-        head, tail = text.split("===ARCHIVE===", 1)
-        recent = head.replace("===RECENT===", "").strip()
-        archive = tail.strip()
-    elif "===RECENT===" in text:
-        recent = text.replace("===RECENT===", "").strip()
+    sections = {"RECENT": "", "ARCHIVE": "", "CORE": ""}
+    parts = re.split(r"===(RECENT|ARCHIVE|CORE)===", text)
+    if len(parts) == 1:
+        sections["RECENT"] = text
     else:
-        recent = text.strip()
+        for marker, content in zip(parts[1::2], parts[2::2]):
+            sections[marker] = content
 
-    recent, archive = _strip_fences(recent), _strip_fences(archive)
+    recent = _strip_fences(sections["RECENT"])
+    archive = _strip_fences(sections["ARCHIVE"])
+    core = _strip_fences(sections["CORE"])
     if recent and not recent.startswith("# Recent"):
         recent = "# Recent\n\n" + recent
     if archive and not archive.startswith("# Archive"):
         archive = "# Archive\n\n" + archive
-    return recent, archive
+    return recent, archive, core
+
+
+def _append_core(path: str, new_core: str) -> None:
+    existing = _read_or_empty(path)
+    with open(path, "a", encoding="utf-8") as f:
+        if not existing.strip():
+            f.write("# Core Memories\n\n")
+        elif not existing.endswith("\n"):
+            f.write("\n")
+        f.write(new_core + "\n")
 
 
 def _strip_fences(text: str) -> str:

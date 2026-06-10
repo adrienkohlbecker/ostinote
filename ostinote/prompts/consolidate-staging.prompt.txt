@@ -11,6 +11,9 @@ recent.md as it stands:
 archive.md as it stands:
 {{ARCHIVE}}
 
+core-memories.md (read-only reference — injected verbatim into every future session, never compressed):
+{{CORE}}
+
 ## Tasks
 
 ### 1. Fold each staging log into recent.md
@@ -27,9 +30,13 @@ Move every recent.md entry more than 3 days old into archive.md, merging entries
 ## Week of YYYY-MM-DD
 Three to five sentences per week: lasting conventions, infrastructure shifts, major deliverables. Day-level detail does not belong here. Remove what you moved from recent.md.
 
+### 3. Nominate core memories — usually none
+
+A core memory is a fact with permanent value: a settled decision plus its reasoning, or a hard-won gotcha that will bite again. Routine progress never qualifies, and neither does anything core-memories.md already states. Cap: two per run; zero is the normal outcome.
+
 ## Reply format
 
-Emit exactly the sections below — no other text, no explanations.
+Emit exactly the sections below — no other text, no explanations. Omit the ===CORE=== block entirely when task 3 produced nothing (the usual case).
 
 ===RECENT===
 # Recent
@@ -40,6 +47,9 @@ Emit exactly the sections below — no other text, no explanations.
 # Archive
 
 <updated archive.md>
+
+===CORE===
+- YYYY-MM-DD: <one line per new core memory>
 
 ## Constraints
 

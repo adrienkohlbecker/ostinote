@@ -191,15 +191,38 @@ def test_parse_response_plain_text():
 
 def test_parse_consolidation_full():
     text = "===RECENT===\n# Recent\n\nA\n\n===ARCHIVE===\n# Archive\n\nB"
-    recent, archive = parse_consolidation_response(text)
+    recent, archive, core = parse_consolidation_response(text)
     assert recent == "# Recent\n\nA"
     assert archive == "# Archive\n\nB"
+    assert core == ""
+
+
+def test_parse_consolidation_core_section():
+    text = (
+        "===RECENT===\n# Recent\n\nA\n===ARCHIVE===\n# Archive\n\nB\n"
+        "===CORE===\n- 2026-06-10: chose MIT"
+    )
+    recent, archive, core = parse_consolidation_response(text)
+    assert recent == "# Recent\n\nA"
+    assert archive == "# Archive\n\nB"
+    assert core == "- 2026-06-10: chose MIT"
 
 
 def test_parse_consolidation_fallbacks():
-    recent, archive = parse_consolidation_response("bare content")
+    recent, archive, core = parse_consolidation_response("bare content")
     assert recent == "# Recent\n\nbare content"
     assert archive == ""
+    assert core == ""
+
+
+def test_append_core(tmp_path):
+    from ostinote.pipeline import _append_core
+
+    path = str(tmp_path / "core-memories.md")
+    _append_core(path, "- 2026-06-10: a")
+    _append_core(path, "- 2026-06-11: b")
+    with open(path) as f:
+        assert f.read() == "# Core Memories\n\n- 2026-06-10: a\n- 2026-06-11: b\n"
 
 
 # --- State and locks -------------------------------------------------------------------
@@ -324,9 +347,10 @@ def test_install_preserves_foreign_hooks(tmp_path, monkeypatch):
 
 def test_parse_consolidation_strips_fences():
     text = "```\n===RECENT===\n# Recent\n\nA\n```\n===ARCHIVE===\n```\n# Archive\n\nB\n```"
-    recent, archive = parse_consolidation_response(text)
+    recent, archive, core = parse_consolidation_response(text)
     assert recent == "# Recent\n\nA"
     assert archive == "# Archive\n\nB"
+    assert core == ""
 
 
 def test_data_dir_slug_placeholder(tmp_path, monkeypatch):
