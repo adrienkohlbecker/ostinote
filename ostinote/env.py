@@ -10,7 +10,7 @@ config, and owns the data-directory layout:
         ostinote.md (handoff)  identity.md  core-memories.md
         state/sessions/<agent>--<session>.json   per-session positions
         state/*.lock  state/last-compress.ts
-        logs/memory-YYYY-MM-DD.log  logs/hook-errors.log
+        logs/memory-YYYY-MM-DD.log
 """
 
 from __future__ import annotations

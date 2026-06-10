@@ -114,10 +114,12 @@ def _run_hook(args) -> None:
     try:
         handlers[args.event](args.agent)
     except Exception:
+        # Env construction may be what crashed, so don't resolve the data
+        # dir — and never create files inside the project.
         try:
-            err_dir = os.path.join(os.getcwd(), ".ostinote", "logs")
-            os.makedirs(err_dir, exist_ok=True)
-            with open(os.path.join(err_dir, "hook-errors.log"), "a", encoding="utf-8") as f:
+            err_path = os.path.expanduser("~/.ostinote/hook-errors.log")
+            os.makedirs(os.path.dirname(err_path), exist_ok=True)
+            with open(err_path, "a", encoding="utf-8") as f:
                 f.write(
                     "[%s %s --agent %s]\n%s\n"
                     % (

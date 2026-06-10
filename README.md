@@ -189,7 +189,7 @@ Optional. Create `~/.ostinote/config.json` (applies everywhere) or `<project>/.o
 
 ## Troubleshooting
 
-- **Is it running?** `ostinote status` shows tracked sessions and when they last saved. Pipeline activity is logged to `.ostinote/logs/memory-<date>.log`; hook crashes land in `.ostinote/logs/hook-errors.log`.
+- **Is it running?** `ostinote status` shows tracked sessions and when they last saved. Pipeline activity is logged to `logs/memory-<date>.log` inside the data dir; hook crashes land in `~/.ostinote/hook-errors.log`.
 - **Nothing is being saved.** Check that `claude` is on the PATH of the shell your agent launches hooks from, and that the session has at least `min_human_messages` human messages.
 - **What is it capturing, exactly?** `ostinote save --dry` prints the extracted conversation without calling the model or writing anything.
 - **Codex says hooks need approval.** Expected on first run — Codex pins a hash of each hook command and asks once.
