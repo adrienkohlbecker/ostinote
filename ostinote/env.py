@@ -23,6 +23,10 @@ import time
 from . import config as config_mod
 from . import tzutil
 
+# Hook crash log. Outside any data dir — written when Env construction
+# itself may have failed — and never inside a project.
+HOOK_ERRORS_PATH = os.path.expanduser("~/.ostinote/hook-errors.log")
+
 
 def _slugify(path: str) -> str:
     # Same scheme as Claude Code's ~/.claude/projects/<slug> and

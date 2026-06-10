@@ -138,6 +138,7 @@ You rarely need any of these — the hooks do everything — but they're useful 
 ```bash
 ostinote status          # where's my memory, what's in it, which sessions are tracked
 ostinote status --costs  # per-day token usage and cost, summed from the logs
+ostinote doctor          # check every link of the pipeline, loudly (--live: one real model call)
 ostinote save --dry      # show what would be captured from the latest session (no cost)
 ostinote save --force    # save right now, skipping cooldowns
 ostinote consolidate     # run the daily consolidation right now
@@ -193,7 +194,7 @@ Optional. Create `~/.ostinote/config.json` (applies everywhere) or `<project>/.o
 
 ## Troubleshooting
 
-- **Is it running?** `ostinote status` shows tracked sessions and when they last saved. Pipeline activity is logged to `logs/memory-<date>.log` inside the data dir; hook crashes land in `~/.ostinote/hook-errors.log`.
+- **Is it running?** `ostinote doctor` checks the whole chain (hooks registered, config readable, summarizer present, data dir writable) and `ostinote status` shows tracked sessions and when they last saved. Pipeline activity is logged to `logs/memory-<date>.log` inside the data dir; hook crashes land in `~/.ostinote/hook-errors.log`.
 - **Nothing is being saved.** Check that `claude` is on the PATH of the shell your agent launches hooks from, and that the session has at least `min_human_messages` human messages.
 - **What is it capturing, exactly?** `ostinote save --dry` prints the extracted conversation without calling the model or writing anything.
 - **Codex says hooks need approval.** Expected on first run — Codex pins a hash of each hook command and asks once.

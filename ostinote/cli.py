@@ -10,6 +10,8 @@ Subcommands:
         Merge past-day staging files into recent.md / archive.md.
     status [--costs]
         Show resolved paths, memory files, and tracked sessions.
+    doctor [--live]
+        Check every link of the (silent-by-design) pipeline, loudly.
     install|uninstall claude|codex|all [--user|--project]
         (Un)register hooks and the /ostinote command.
 """
@@ -23,6 +25,7 @@ import time
 import traceback
 
 from . import costs as costs_mod
+from . import env as env_mod
 from . import hooks as hooks_mod
 from . import install as install_mod
 from . import pipeline
@@ -65,6 +68,12 @@ def main(argv=None) -> None:
     p_status.add_argument("--cwd", default=None)
     p_status.add_argument(
         "--costs", action="store_true", help="show per-day token usage and cost instead"
+    )
+
+    p_doctor = sub.add_parser("doctor", help="check the whole pipeline, loudly")
+    p_doctor.add_argument("--cwd", default=None)
+    p_doctor.add_argument(
+        "--live", action="store_true", help="also run one real (paid) summarizer call"
     )
 
     for name in ("install", "uninstall"):
@@ -111,6 +120,10 @@ def main(argv=None) -> None:
     elif args.command == "status":
         env = Env(args.cwd or os.getcwd())
         _costs(env) if args.costs else _status(env)
+    elif args.command == "doctor":
+        from . import doctor as doctor_mod
+
+        sys.exit(doctor_mod.run(Env(args.cwd or os.getcwd()), live=args.live))
     elif args.command in ("install", "uninstall"):
         root = os.path.abspath(args.cwd or os.getcwd())
         targets = agent_names() if args.agent == "all" else [args.agent]
@@ -131,12 +144,9 @@ def _run_hook(args) -> None:
     try:
         handlers[args.event](args.agent)
     except Exception:
-        # Env construction may be what crashed, so don't resolve the data
-        # dir — and never create files inside the project.
         try:
-            err_path = os.path.expanduser("~/.ostinote/hook-errors.log")
-            os.makedirs(os.path.dirname(err_path), exist_ok=True)
-            with open(err_path, "a", encoding="utf-8") as f:
+            os.makedirs(os.path.dirname(env_mod.HOOK_ERRORS_PATH), exist_ok=True)
+            with open(env_mod.HOOK_ERRORS_PATH, "a", encoding="utf-8") as f:
                 f.write(
                     "[%s %s --agent %s]\n%s\n"
                     % (

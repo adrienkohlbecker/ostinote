@@ -427,6 +427,50 @@ def test_costs_day_totals(tmp_path):
     assert totals["cost"] == pytest.approx(0.000123)  # unreported cost not invented
 
 
+def test_doctor_smoke(tmp_path, monkeypatch, capsys):
+    from ostinote import doctor as doctor_mod
+    from ostinote import install as install_mod
+    from ostinote.env import Env
+
+    monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", str(tmp_path / "user.json"))
+    monkeypatch.setattr(doctor_mod, "HOOK_ERRORS_PATH", str(tmp_path / "hook-errors.log"))
+    monkeypatch.setattr(doctor_mod.shutil, "which", lambda _: "/usr/bin/claude")
+    monkeypatch.setattr(install_mod, "self_command", lambda: ["/usr/bin/ostinote"])
+
+    proj = tmp_path / "proj"
+    (proj / ".ostinote").mkdir(parents=True)
+    (proj / ".ostinote" / "config.json").write_text(
+        json.dumps({"data_dir": str(tmp_path / "data"), "share_worktrees": False})
+    )
+    install_mod.install("claude", "project", str(proj))
+    install_mod.install("codex", "project", str(proj))
+    # Keep the user-scope lookup away from the real home directory.
+    project_only = install_mod._hooks_file_for
+    monkeypatch.setattr(
+        doctor_mod,
+        "_hooks_file_for",
+        lambda agent, scope, root: (
+            project_only(agent, scope, root)
+            if scope == "project"
+            else str(tmp_path / "no-user-hooks.json")
+        ),
+    )
+
+    assert doctor_mod.run(Env(str(proj))) == 0
+    out = capsys.readouterr().out
+    assert "claude: hooks registered" in out
+    assert "codex: hooks registered" in out
+    assert "FAIL" not in out
+
+    # A half-registered agent is a FAIL with a fix hint.
+    claude_settings = proj / ".claude" / "settings.json"
+    data = json.loads(claude_settings.read_text())
+    del data["hooks"]["SessionEnd"]
+    claude_settings.write_text(json.dumps(data))
+    assert doctor_mod.run(Env(str(proj))) == 1
+    assert "hooks missing SessionEnd" in capsys.readouterr().out
+
+
 def test_summarizer_never_persists_sessions(monkeypatch):
     from ostinote import summarize
 
