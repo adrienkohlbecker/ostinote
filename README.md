@@ -137,6 +137,7 @@ You rarely need any of these — the hooks do everything — but they're useful 
 
 ```bash
 ostinote status          # where's my memory, what's in it, which sessions are tracked
+ostinote status --costs  # per-day token usage and cost, summed from the logs
 ostinote save --dry      # show what would be captured from the latest session (no cost)
 ostinote save --force    # save right now, skipping cooldowns
 ostinote consolidate     # run the daily consolidation right now

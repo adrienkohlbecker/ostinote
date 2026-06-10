@@ -404,6 +404,29 @@ def test_config_legacy_remember_keys(tmp_path, monkeypatch):
     assert cfg["cooldowns"]["compress_seconds"] == 7200
 
 
+def test_costs_day_totals(tmp_path):
+    from ostinote import costs
+
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "memory-2026-06-09.log").write_text(
+        "12:00:00 [save] tokens: 100+50cache→20out ($0.000123)\n"
+        "12:30:00 [compress] tokens: 200+0cache→40out\n"
+        "12:31:00 [hook] not a token line\n"
+    )
+    (logs / "memory-2026-06-10.log").write_text("09:00:00 [hook] no calls today\n")
+    (logs / "background.log").write_text("[save] tokens: 9+9cache→9out ($9)\n")
+
+    days = costs.day_totals(str(logs))
+    assert [d for d, _ in days] == ["2026-06-09"]  # only daily logs with calls
+    totals = days[0][1]
+    assert totals["calls"] == 2
+    assert totals["input"] == 300
+    assert totals["cache"] == 50
+    assert totals["output"] == 60
+    assert totals["cost"] == pytest.approx(0.000123)  # unreported cost not invented
+
+
 def test_summarizer_never_persists_sessions(monkeypatch):
     from ostinote import summarize
 

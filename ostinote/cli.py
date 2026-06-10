@@ -8,7 +8,7 @@ Subcommands:
         Extract + summarize one session into now.md.
     consolidate
         Merge past-day staging files into recent.md / archive.md.
-    status
+    status [--costs]
         Show resolved paths, memory files, and tracked sessions.
     install|uninstall claude|codex|all [--user|--project]
         (Un)register hooks and the /ostinote command.
@@ -22,6 +22,7 @@ import sys
 import time
 import traceback
 
+from . import costs as costs_mod
 from . import hooks as hooks_mod
 from . import install as install_mod
 from . import pipeline
@@ -62,6 +63,9 @@ def main(argv=None) -> None:
 
     p_status = sub.add_parser("status", help="show memory state")
     p_status.add_argument("--cwd", default=None)
+    p_status.add_argument(
+        "--costs", action="store_true", help="show per-day token usage and cost instead"
+    )
 
     for name in ("install", "uninstall"):
         p = sub.add_parser(name, help="%s hooks for an agent" % name)
@@ -105,7 +109,8 @@ def main(argv=None) -> None:
         env = Env(args.cwd or os.getcwd())
         sys.exit(pipeline.run_consolidation(env))
     elif args.command == "status":
-        _status(Env(args.cwd or os.getcwd()))
+        env = Env(args.cwd or os.getcwd())
+        _costs(env) if args.costs else _status(env)
     elif args.command in ("install", "uninstall"):
         root = os.path.abspath(args.cwd or os.getcwd())
         targets = agent_names() if args.agent == "all" else [args.agent]
@@ -182,6 +187,39 @@ def _status(env: Env) -> None:
                 "saved %dm ago" % (age // 60) if age is not None else "never saved",
             )
         )
+
+
+def _costs(env: Env) -> None:
+    days = costs_mod.day_totals(env.logs_dir)
+    if not days:
+        print("no model calls logged in %s" % env.logs_dir)
+        return
+    header = ("day", "calls", "input", "cache", "output", "cost")
+    print("%-12s %6s %12s %12s %10s %10s" % header)
+    total = {"calls": 0, "input": 0, "cache": 0, "output": 0, "cost": 0.0}
+    for day, t in days:
+        for key in total:
+            total[key] += t[key]
+        print(
+            "%-12s %6d %12d %12d %10d %10s"
+            % (day, t["calls"], t["input"], t["cache"], t["output"], _usd(t["cost"]))
+        )
+    print(
+        "%-12s %6d %12d %12d %10d %10s"
+        % (
+            "total",
+            total["calls"],
+            total["input"],
+            total["cache"],
+            total["output"],
+            _usd(total["cost"]),
+        )
+    )
+    print("\n(cost is summed only from calls whose engine reported it)")
+
+
+def _usd(cost: float) -> str:
+    return "$%.4f" % cost if cost else "-"
 
 
 if __name__ == "__main__":
