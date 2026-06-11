@@ -78,7 +78,31 @@ def _command_str(subcommand: str, agent: str) -> str:
 
 
 def _is_ours(command: str) -> bool:
-    return "ostinote" in command and "--agent" in command
+    try:
+        parts = shlex.split(command, posix=os.name != "nt")
+    except ValueError:
+        return False
+    for idx, part in enumerate(parts):
+        if part != "hook":
+            continue
+        suffix = parts[idx:]
+        if (
+            len(suffix) == 4
+            and suffix[1] in _MANAGED_SUBCOMMANDS
+            and suffix[2] == "--agent"
+            and suffix[3] in _SKILLS
+            and _is_ostinote_invocation(parts[:idx])
+        ):
+            return True
+    return False
+
+
+def _is_ostinote_invocation(parts: list[str]) -> bool:
+    if len(parts) == 1:
+        name = os.path.basename(parts[0]).lower()
+        stem, _ext = os.path.splitext(name)
+        return stem == "ostinote"
+    return len(parts) >= 3 and parts[-2:] == ["-m", "ostinote"]
 
 
 def _read_json(path: str) -> dict:
@@ -121,17 +145,14 @@ def _write_text_atomic(path: str, text: str) -> None:
 
 
 def _update_hooks(settings: dict, agent: str, remove_only: bool = False) -> dict:
-    hooks = settings.setdefault("hooks", {})
+    hooks = settings.get("hooks")
+    if hooks is None:
+        hooks = {}
+        settings["hooks"] = hooks
+    elif not isinstance(hooks, dict):
+        raise _ConfigError("invalid hooks schema: expected hooks to be an object")
     for event, subcommand in _events_for(agent).items():
-        groups = hooks.get(event, [])
-        # Strip our hooks from every matcher group, drop emptied groups.
-        kept_groups = []
-        for group in groups:
-            inner = [h for h in group.get("hooks", []) if not _is_ours(h.get("command", ""))]
-            if inner:
-                group = dict(group)
-                group["hooks"] = inner
-                kept_groups.append(group)
+        kept_groups = _strip_managed_hooks(hooks.get(event, []))
         if not remove_only:
             kept_groups.append(
                 {"hooks": [{"type": "command", "command": _command_str(subcommand, agent)}]}
@@ -143,6 +164,31 @@ def _update_hooks(settings: dict, agent: str, remove_only: bool = False) -> dict
     if not hooks:
         settings.pop("hooks", None)
     return settings
+
+
+def _strip_managed_hooks(groups) -> list:
+    if not isinstance(groups, list):
+        return [groups]
+    kept_groups = []
+    for group in groups:
+        if not isinstance(group, dict):
+            kept_groups.append(group)
+            continue
+        group_hooks = group.get("hooks")
+        if not isinstance(group_hooks, list):
+            kept_groups.append(group)
+            continue
+        inner = []
+        for hook in group_hooks:
+            command = hook.get("command") if isinstance(hook, dict) else None
+            if isinstance(command, str) and _is_ours(command):
+                continue
+            inner.append(hook)
+        if inner:
+            group = dict(group)
+            group["hooks"] = inner
+            kept_groups.append(group)
+    return kept_groups
 
 
 def _hooks_file_for(agent: str, scope: str, project_root: str) -> str:
