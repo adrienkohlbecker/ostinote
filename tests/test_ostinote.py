@@ -356,6 +356,7 @@ def test_skill_installed_per_agent_and_scope(tmp_path, monkeypatch):
 
     home = tmp_path / "home"
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))  # Windows uses USERPROFILE, not HOME
     monkeypatch.setattr(install_mod, "self_command", lambda: ["/usr/bin/ostinote"])
 
     root = str(tmp_path / "proj")
@@ -481,9 +482,10 @@ def test_data_dir_slug_placeholder(tmp_path, monkeypatch):
     env = Env(str(proj))
     import re
 
-    # claude-remember / Claude Code slug scheme: leading dash kept
+    # claude-remember / Claude Code slug scheme: leading dash kept (Unix only; Windows paths start with drive letter)
     expected_slug = re.sub(r"[^a-zA-Z0-9]", "-", str(proj))
-    assert expected_slug.startswith("-")
+    if os.name != "nt":
+        assert expected_slug.startswith("-")
     assert env.data_dir == str(store / expected_slug)
 
 
@@ -522,10 +524,11 @@ def test_costs_day_totals(tmp_path):
     (logs / "memory-2026-06-09.log").write_text(
         "12:00:00 [save] tokens: 100+50cache→20out ($0.000123)\n"
         "12:30:00 [compress] tokens: 200+0cache→40out\n"
-        "12:31:00 [hook] not a token line\n"
+        "12:31:00 [hook] not a token line\n",
+        encoding="utf-8",
     )
-    (logs / "memory-2026-06-10.log").write_text("09:00:00 [hook] no calls today\n")
-    (logs / "background.log").write_text("[save] tokens: 9+9cache→9out ($9)\n")
+    (logs / "memory-2026-06-10.log").write_text("09:00:00 [hook] no calls today\n", encoding="utf-8")
+    (logs / "background.log").write_text("[save] tokens: 9+9cache→9out ($9)\n", encoding="utf-8")
 
     days = costs.day_totals(str(logs))
     assert [d for d, _ in days] == ["2026-06-09"]  # only daily logs with calls
