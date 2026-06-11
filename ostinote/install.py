@@ -22,6 +22,8 @@ import json
 import os
 import shlex
 import shutil
+import subprocess
+import tempfile
 
 from .hooks import self_command
 
@@ -43,23 +45,34 @@ _SKILLS = {
     "claude": (".claude", "/ostinote"),
     "codex": (".agents", "$ostinote"),
 }
+_MANAGED_SUBCOMMANDS = set(_EVENTS.values())
+for _agent_events in _AGENT_EVENTS.values():
+    _MANAGED_SUBCOMMANDS.update(_agent_events.values())
+_WINDOWS_CMD_METACHARS = set("&|<>^")
+
+
+class _ConfigError(RuntimeError):
+    pass
 
 
 def _events_for(agent: str) -> dict:
     return {**_EVENTS, **_AGENT_EVENTS.get(agent, {})}
 
 
-def _quote(part: str) -> str:
+def _format_command(argv: list[str]) -> str:
     if os.name == "nt":
-        # Hook commands run through cmd.exe on Windows — POSIX single quotes
-        # would be passed literally.
-        return '"%s"' % part if (" " in part or "\t" in part) else part
-    return shlex.quote(part)
+        bad = [part for part in argv if any(char in part for char in _WINDOWS_CMD_METACHARS)]
+        if bad:
+            raise _ConfigError(
+                "cannot safely render Windows hook command part with cmd.exe metacharacter: %s"
+                % bad[0]
+            )
+        return subprocess.list2cmdline(argv)
+    return shlex.join(argv)
 
 
 def _command_str(subcommand: str, agent: str) -> str:
-    base = " ".join(_quote(part) for part in self_command())
-    return "%s hook %s --agent %s" % (base, subcommand, agent)
+    return _format_command(self_command() + ["hook", subcommand, "--agent", agent])
 
 
 def _is_ours(command: str) -> bool:
@@ -69,16 +82,40 @@ def _is_ours(command: str) -> bool:
 def _read_json(path: str) -> dict:
     try:
         with open(path, encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, json.JSONDecodeError):
+            data = json.load(f)
+    except FileNotFoundError:
         return {}
+    except json.JSONDecodeError as e:
+        raise _ConfigError(
+            "invalid JSON in %s at line %d column %d: %s" % (path, e.lineno, e.colno, e.msg)
+        ) from e
+    except OSError as e:
+        raise _ConfigError("cannot read %s: %s" % (path, e)) from e
+    if not isinstance(data, dict):
+        raise _ConfigError("invalid JSON in %s: expected an object" % path)
+    return data
 
 
 def _write_json(path: str, data: dict) -> None:
+    text = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+    _write_text_atomic(path, text)
+
+
+def _write_text_atomic(path: str, text: str) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-        f.write("\n")
+    fd, tmp = tempfile.mkstemp(
+        prefix=".ostinote-", suffix=".tmp", dir=os.path.dirname(path), text=True
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def _update_hooks(settings: dict, agent: str, remove_only: bool = False) -> dict:
@@ -126,12 +163,17 @@ def install(agent: str, scope: str, project_root: str, remove: bool = False) -> 
     """(Un)register hooks and the /ostinote command. Returns report lines."""
     report = []
     path = _hooks_file_for(agent, scope, project_root)
-    settings = _read_json(path)
-    settings = _update_hooks(settings, agent, remove_only=remove)
-    _write_json(path, settings)
-    report.append(
-        "%s hooks %s: %s" % (agent, "removed from" if remove else "registered in", path)
-    )
+    if not remove or os.path.exists(path):
+        try:
+            settings = _read_json(path)
+            settings = _update_hooks(settings, agent, remove_only=remove)
+        except _ConfigError as e:
+            report.append("ERROR: %s" % e)
+            return report
+        _write_json(path, settings)
+        report.append(
+            "%s hooks %s: %s" % (agent, "removed from" if remove else "registered in", path)
+        )
 
     # The ostinote core-memory command, as a skill (same file for both agents).
     base, invoke = _SKILLS[agent]
