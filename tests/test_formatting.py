@@ -1,0 +1,153 @@
+import json
+
+from ostinote.pipeline import _last_entry, format_exchanges, parse_consolidation_response
+from ostinote.summarize import parse_response
+
+# --- Extract formatting ----------------------------------------------------------
+
+
+def test_format_exchanges():
+    """Format parsed transcript messages into the model prompt excerpt.
+
+    Expected: the output includes the session id, total transcript line count,
+    and clearly labeled HUMAN/AGENT blocks so the summarizer sees structured
+    context.
+    """
+    text = format_exchanges("sid", 12, [("HUMAN", "hi"), ("AGENT", "hello")])
+    assert text.startswith("Session: sid\nLines: 12")
+    assert "[HUMAN]\nhi" in text
+    assert "[AGENT]\nhello" in text
+
+
+def test_last_entry(tmp_path):
+    """Find the last saved `now.md` entry for deduplication context.
+
+    Expected: a missing file reports no previous entry, and a file with multiple
+    `## time | branch` blocks returns only the final block.
+    """
+    now = tmp_path / "now.md"
+    assert _last_entry(str(now)) == "(no previous entry)"
+    now.write_text("\n## 10:00 | main\nfirst\n\n## 11:30 | main\nsecond thing\n")
+    assert _last_entry(str(now)) == "## 11:30 | main\nsecond thing"
+
+
+# --- Summarizer response parsing ---------------------------------------------------
+
+
+def test_parse_response_dict():
+    """Parse the common JSON object shape returned by the summarizer command.
+
+    Expected: result text, skip status, token counts, and reported cost are all
+    copied into the `ModelResult` wrapper.
+    """
+    raw = json.dumps(
+        {
+            "result": "## 10:00 | main\ndid stuff",
+            "usage": {"input_tokens": 100, "output_tokens": 20},
+            "total_cost_usd": 0.001,
+        }
+    )
+    r = parse_response(raw)
+    assert r.text.startswith("## 10:00")
+    assert not r.is_skip
+    assert r.tokens.input == 100
+    assert r.tokens.cost_usd == 0.001
+
+
+def test_parse_response_list_and_skip():
+    """Parse the newer list-of-events JSON shape and recognize SKIP.
+
+    Expected: the last result event is used, and a `SKIP` response is marked as
+    a skip so the pipeline advances state without writing memory.
+    """
+    raw = json.dumps(
+        [
+            {
+                "type": "result",
+                "result": "SKIP",
+                "usage": {"input_tokens": 5, "output_tokens": 1},
+            }
+        ]
+    )
+    r = parse_response(raw)
+    assert r.is_skip
+
+
+def test_parse_response_plain_text():
+    """Accept plain text summarizer output.
+
+    Expected: non-JSON stdout is treated as the model text verbatim, which keeps
+    alternate summarizer commands usable.
+    """
+    r = parse_response("just words")
+    assert r.text == "just words"
+
+
+# --- Consolidation parsing -----------------------------------------------------------
+
+
+def test_parse_consolidation_full():
+    """Split a complete consolidation response into recent and archive files.
+
+    Expected: `===RECENT===` and `===ARCHIVE===` markers are stripped, each
+    section keeps its Markdown heading, and the optional core section is empty.
+    """
+    text = "===RECENT===\n# Recent\n\nA\n\n===ARCHIVE===\n# Archive\n\nB"
+    recent, archive, core = parse_consolidation_response(text)
+    assert recent == "# Recent\n\nA"
+    assert archive == "# Archive\n\nB"
+    assert core == ""
+
+
+def test_parse_consolidation_core_section():
+    """Parse a consolidation response that promotes a new core memory.
+
+    Expected: recent and archive are parsed as usual, and text after
+    `===CORE===` is returned separately for appending to `core-memories.md`.
+    """
+    text = "===RECENT===\n# Recent\n\nA\n===ARCHIVE===\n# Archive\n\nB\n===CORE===\n- 2026-06-10: chose MIT"
+    recent, archive, core = parse_consolidation_response(text)
+    assert recent == "# Recent\n\nA"
+    assert archive == "# Archive\n\nB"
+    assert core == "- 2026-06-10: chose MIT"
+
+
+def test_parse_consolidation_fallbacks():
+    """Treat unmarked consolidation output as replacement recent memory.
+
+    Expected: bare content becomes a `# Recent` document, while archive and core
+    stay empty. This is the forgiving path for imperfect model formatting.
+    """
+    recent, archive, core = parse_consolidation_response("bare content")
+    assert recent == "# Recent\n\nbare content"
+    assert archive == ""
+    assert core == ""
+
+
+def test_append_core(tmp_path):
+    """Append promoted core-memory lines to the persistent core file.
+
+    Expected: the first append creates the `# Core Memories` heading, later
+    appends preserve the existing content and add one line per promoted fact.
+    """
+    from ostinote.pipeline import _append_core
+
+    path = str(tmp_path / "core-memories.md")
+    _append_core(path, "- 2026-06-10: a")
+    _append_core(path, "- 2026-06-11: b")
+    with open(path) as f:
+        assert f.read() == "# Core Memories\n\n- 2026-06-10: a\n- 2026-06-11: b\n"
+
+
+def test_parse_consolidation_strips_fences():
+    """Ignore Markdown code fences copied into model consolidation output.
+
+    Expected: fence-only lines are removed before marker parsing, so recent and
+    archive content are extracted normally even if the model wrapped examples in
+    triple backticks.
+    """
+    text = "```\n===RECENT===\n# Recent\n\nA\n```\n===ARCHIVE===\n```\n# Archive\n\nB\n```"
+    recent, archive, core = parse_consolidation_response(text)
+    assert recent == "# Recent\n\nA"
+    assert archive == "# Archive\n\nB"
+    assert core == ""
