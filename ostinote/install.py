@@ -20,11 +20,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
 import tempfile
 
+from .env import Env
 from .hooks import self_command
 
 ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
@@ -191,9 +193,158 @@ def install(agent: str, scope: str, project_root: str, remove: bool = False) -> 
         os.makedirs(skill_dir, exist_ok=True)
         shutil.copyfile(os.path.join(ASSETS_DIR, "SKILL.md"), target)
         report.append("%s %s skill installed: %s" % (agent, invoke, target))
+        if agent == "codex":
+            try:
+                report.append(_ensure_codex_writable_root(project_root))
+            except OSError as e:
+                report.append("ERROR: could not update Codex writable roots: %s" % e)
 
     report.extend(_warnings(agent, remove))
     return report
+
+
+def _ensure_codex_writable_root(project_root: str) -> str:
+    config_path = os.path.expanduser("~/.codex/config.toml")
+    root = _home_relative(Env(project_root).data_dir)
+    try:
+        with open(config_path, encoding="utf-8") as f:
+            content = f.read()
+    except FileNotFoundError:
+        content = ""
+    new_content, changed = _append_toml_array_value(
+        content, "sandbox_workspace_write", "writable_roots", root
+    )
+    if changed:
+        _write_text_atomic(config_path, new_content)
+        return "codex writable root added: %s" % root
+    return "codex writable root already present: %s" % root
+
+
+def _home_relative(path: str) -> str:
+    home = os.path.abspath(os.path.expanduser("~"))
+    absolute = os.path.abspath(path)
+    try:
+        if os.path.commonpath([home, absolute]) == home:
+            rel = os.path.relpath(absolute, home)
+            return "~" if rel == "." else os.path.join("~", rel)
+    except ValueError:
+        pass
+    return path
+
+
+def _append_toml_array_value(
+    content: str, section: str, key: str, value: str
+) -> tuple[str, bool]:
+    values = _toml_array_values(content, section, key)
+    if _toml_has_value(values, value):
+        return content, False
+    values.append(value)
+    lines = content.splitlines(True)
+    start, end = _toml_section_bounds(lines, section)
+    array = _format_toml_array(key, values, "")
+    if start is None:
+        prefix = content
+        if prefix and not prefix.endswith("\n"):
+            prefix += "\n"
+        if prefix:
+            prefix += "\n"
+        return prefix + "[%s]\n%s" % (section, array), True
+    key_idx = _toml_key_index(lines, start + 1, end, key)
+    if key_idx is None:
+        new_lines = lines[:end] + [array] + lines[end:]
+        return "".join(new_lines), True
+    close_idx = _toml_array_close_index(lines, key_idx)
+    indent = lines[key_idx][: len(lines[key_idx]) - len(lines[key_idx].lstrip())]
+    array = _format_toml_array(key, values, indent)
+    return "".join(lines[:key_idx] + [array] + lines[close_idx + 1 :]), True
+
+
+def _toml_has_value(values: list[str], value: str) -> bool:
+    target = _normalized_root(value)
+    for existing in values:
+        if existing == value or _normalized_root(existing) == target:
+            return True
+    return False
+
+
+def _normalized_root(value: str) -> str:
+    return os.path.normcase(os.path.abspath(os.path.expanduser(value)))
+
+
+def _toml_array_values(content: str, section: str, key: str) -> list[str]:
+    try:
+        import tomllib  # type: ignore[import-not-found]
+
+        table = tomllib.loads(content).get(section, {})
+        values = table.get(key, []) if isinstance(table, dict) else []
+        if isinstance(values, list):
+            return [value for value in values if isinstance(value, str)]
+    except Exception:
+        pass
+    lines = content.splitlines(True)
+    start, end = _toml_section_bounds(lines, section)
+    if start is None:
+        return []
+    key_idx = _toml_key_index(lines, start + 1, end, key)
+    if key_idx is None:
+        return []
+    close_idx = _toml_array_close_index(lines, key_idx)
+    text = "".join(lines[key_idx : close_idx + 1])
+    values = []
+    for match in re.finditer(r'"((?:\\.|[^"\\])*)"|\'([^\']*)\'', text):
+        token = match.group(0)
+        if token.startswith("'"):
+            values.append(token[1:-1])
+            continue
+        try:
+            values.append(json.loads(token))
+        except json.JSONDecodeError:
+            pass
+    return values
+
+
+def _toml_section_bounds(lines: list[str], section: str):
+    start = None
+    for idx, line in enumerate(lines):
+        name = _toml_section_name(line)
+        if name is None:
+            continue
+        if start is not None:
+            return start, idx
+        if name == section:
+            start = idx
+    return start, len(lines)
+
+
+def _toml_section_name(line: str):
+    head = line.split("#", 1)[0].strip()
+    if head.startswith("[[") or not (head.startswith("[") and head.endswith("]")):
+        return None
+    return head[1:-1].strip()
+
+
+def _toml_key_index(lines: list[str], start: int, end: int, key: str):
+    for idx in range(start, end):
+        if lines[idx].split("#", 1)[0].split("=", 1)[0].strip() == key:
+            return idx
+    return None
+
+
+def _toml_array_close_index(lines: list[str], start: int) -> int:
+    depth = 0
+    for idx in range(start, len(lines)):
+        depth += lines[idx].count("[") - lines[idx].count("]")
+        if depth <= 0 and "[" in lines[start]:
+            return idx
+    return start
+
+
+def _format_toml_array(key: str, values: list[str], indent: str) -> str:
+    lines = ["%s%s = [\n" % (indent, key)]
+    for value in values:
+        lines.append("%s  %s,\n" % (indent, json.dumps(value, ensure_ascii=False)))
+    lines.append("%s]\n" % indent)
+    return "".join(lines)
 
 
 def _warnings(agent: str, remove: bool) -> list[str]:
@@ -201,7 +352,10 @@ def _warnings(agent: str, remove: bool) -> list[str]:
     if remove:
         return warnings
     if agent == "claude":
-        settings = _read_json(os.path.expanduser("~/.claude/settings.json"))
+        try:
+            settings = _read_json(os.path.expanduser("~/.claude/settings.json"))
+        except _ConfigError as e:
+            return ["WARNING: could not inspect legacy Claude plugin setting: %s" % e]
         enabled = settings.get("enabledPlugins", {})
         for key, value in enabled.items():
             if key.startswith("remember@") and value:
