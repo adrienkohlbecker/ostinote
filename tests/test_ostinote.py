@@ -330,9 +330,18 @@ def test_config_project_overrides(tmp_path, monkeypatch):
 # --- Installer -------------------------------------------------------------------------
 
 
+def _installer_home(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))  # Windows uses USERPROFILE, not HOME
+    monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", str(home / ".ostinote/config.json"))
+    return home
+
+
 def test_install_uninstall_idempotent(tmp_path, monkeypatch):
     from ostinote import install as install_mod
 
+    _installer_home(tmp_path, monkeypatch)
     monkeypatch.setattr(install_mod, "self_command", lambda: ["/usr/bin/ostinote"])
     root = str(tmp_path)
 
@@ -354,9 +363,7 @@ def test_install_uninstall_idempotent(tmp_path, monkeypatch):
 def test_skill_installed_per_agent_and_scope(tmp_path, monkeypatch):
     from ostinote import install as install_mod
 
-    home = tmp_path / "home"
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("USERPROFILE", str(home))  # Windows uses USERPROFILE, not HOME
+    home = _installer_home(tmp_path, monkeypatch)
     monkeypatch.setattr(install_mod, "self_command", lambda: ["/usr/bin/ostinote"])
 
     root = str(tmp_path / "proj")
@@ -377,6 +384,7 @@ def test_skill_installed_per_agent_and_scope(tmp_path, monkeypatch):
 def test_install_session_end_events_per_agent(tmp_path, monkeypatch):
     from ostinote import install as install_mod
 
+    _installer_home(tmp_path, monkeypatch)
     monkeypatch.setattr(install_mod, "self_command", lambda: ["/usr/bin/ostinote"])
     root = str(tmp_path)
     install_mod.install("claude", "project", root)
@@ -431,6 +439,7 @@ def test_session_start_source_filter(tmp_path, monkeypatch, capsys, source, inje
 def test_install_preserves_foreign_hooks(tmp_path, monkeypatch):
     from ostinote import install as install_mod
 
+    _installer_home(tmp_path, monkeypatch)
     monkeypatch.setattr(install_mod, "self_command", lambda: ["/usr/bin/ostinote"])
     root = str(tmp_path)
     hooks_file = tmp_path / ".codex" / "hooks.json"
@@ -454,6 +463,120 @@ def test_install_preserves_foreign_hooks(tmp_path, monkeypatch):
     commands = [h["command"] for g in data["hooks"]["PostToolUse"] for h in g["hooks"]]
     assert "./lint.sh" in commands
     assert any("--agent codex" in c for c in commands)
+
+
+def test_codex_install_adds_memory_dir_to_writable_roots(tmp_path, monkeypatch):
+    import re
+
+    from ostinote import install as install_mod
+
+    home = _installer_home(tmp_path, monkeypatch)
+    monkeypatch.setattr(install_mod, "self_command", lambda: ["/usr/bin/ostinote"])
+    root = str(tmp_path / "proj")
+    (tmp_path / "proj").mkdir()
+    config = home / ".codex" / "config.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        'model = "gpt-5"\n\n'
+        "[sandbox_workspace_write]\n"
+        'writable_roots = ["~/already"]\n'
+        "network_access = true\n",
+        encoding="utf-8",
+    )
+
+    install_mod.install("codex", "project", root)
+    install_mod.install("codex", "project", root)
+    install_mod.install("codex", "project", root, remove=True)
+
+    expected = "~/.ostinote/projects/%s" % re.sub(r"[^a-zA-Z0-9]", "-", root)
+    text = config.read_text(encoding="utf-8")
+    assert text.count(expected) == 1
+    assert "network_access = true" in text
+    assert '"~/already"' in text
+
+
+def test_install_refuses_invalid_hook_json(tmp_path, monkeypatch):
+    from ostinote import install as install_mod
+
+    _installer_home(tmp_path, monkeypatch)
+    monkeypatch.setattr(install_mod, "self_command", lambda: ["/usr/bin/ostinote"])
+    root = str(tmp_path)
+    hooks_file = tmp_path / ".codex" / "hooks.json"
+    hooks_file.parent.mkdir()
+    hooks_file.write_text("{", encoding="utf-8")
+
+    report = install_mod.install("codex", "project", root)
+
+    assert report[0].startswith("ERROR: invalid JSON")
+    assert hooks_file.read_text(encoding="utf-8") == "{"
+    assert not (tmp_path / ".agents" / "skills" / "ostinote" / "SKILL.md").exists()
+
+
+def test_install_preserves_similar_and_nonconforming_hooks(tmp_path, monkeypatch):
+    from ostinote import install as install_mod
+
+    _installer_home(tmp_path, monkeypatch)
+    monkeypatch.setattr(install_mod, "self_command", lambda: ["/usr/bin/ostinote"])
+    root = str(tmp_path)
+    hooks_file = tmp_path / ".codex" / "hooks.json"
+    hooks_file.parent.mkdir()
+    hooks_file.write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "PostToolUse": [
+                        {
+                            "matcher": "Bash",
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": "echo ostinote --agent codex",
+                                },
+                                {
+                                    "type": "command",
+                                    "command": "/old/ostinote hook post-tool --agent codex",
+                                },
+                                {"type": "command", "command": "./écho.sh"},
+                            ],
+                        },
+                        {"matcher": "Opaque", "hooks": "leave-me"},
+                        "strange-group",
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    install_mod.install("codex", "project", root)
+
+    text = hooks_file.read_text(encoding="utf-8")
+    data = json.loads(text)
+    groups = data["hooks"]["PostToolUse"]
+    commands = [
+        hook["command"]
+        for group in groups
+        if isinstance(group, dict) and isinstance(group.get("hooks"), list)
+        for hook in group["hooks"]
+    ]
+    assert "echo ostinote --agent codex" in commands
+    assert "/old/ostinote hook post-tool --agent codex" not in commands
+    assert "./écho.sh" in commands
+    assert "\\u00e9" not in text
+    assert {"matcher": "Opaque", "hooks": "leave-me"} in groups
+    assert "strange-group" in groups
+
+
+def test_uninstall_clean_project_does_not_create_hook_files(tmp_path, monkeypatch):
+    from ostinote import install as install_mod
+
+    _installer_home(tmp_path, monkeypatch)
+    root = str(tmp_path / "proj")
+    (tmp_path / "proj").mkdir()
+
+    assert install_mod.install("codex", "project", root, remove=True) == []
+    assert not (tmp_path / "proj" / ".codex").exists()
+    assert not (tmp_path / "proj" / ".agents").exists()
 
 
 def test_parse_consolidation_strips_fences():
@@ -482,7 +605,8 @@ def test_data_dir_slug_placeholder(tmp_path, monkeypatch):
     env = Env(str(proj))
     import re
 
-    # claude-remember / Claude Code slug scheme: leading dash kept (Unix only; Windows paths start with drive letter)
+    # claude-remember / Claude Code slug scheme: leading dash kept.
+    # Windows paths start with drive letters instead.
     expected_slug = re.sub(r"[^a-zA-Z0-9]", "-", str(proj))
     if os.name != "nt":
         assert expected_slug.startswith("-")
@@ -527,8 +651,12 @@ def test_costs_day_totals(tmp_path):
         "12:31:00 [hook] not a token line\n",
         encoding="utf-8",
     )
-    (logs / "memory-2026-06-10.log").write_text("09:00:00 [hook] no calls today\n", encoding="utf-8")
-    (logs / "background.log").write_text("[save] tokens: 9+9cache→9out ($9)\n", encoding="utf-8")
+    (logs / "memory-2026-06-10.log").write_text(
+        "09:00:00 [hook] no calls today\n", encoding="utf-8"
+    )
+    (logs / "background.log").write_text(
+        "[save] tokens: 9+9cache→9out ($9)\n", encoding="utf-8"
+    )
 
     days = costs.day_totals(str(logs))
     assert [d for d, _ in days] == ["2026-06-09"]  # only daily logs with calls
