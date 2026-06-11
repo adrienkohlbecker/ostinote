@@ -71,9 +71,7 @@ class CodexAgent(Agent):
                         continue
                     texts = _message_texts(payload.get("content", []), role)
                     if texts:
-                        messages.append(
-                            ("HUMAN" if role == "user" else "AGENT", "\n".join(texts))
-                        )
+                        messages.append(("HUMAN" if role == "user" else "AGENT", "\n".join(texts)))
                 elif ptype == "function_call":
                     messages.append(("AGENT", _format_function_call(payload)))
                 elif ptype == "custom_tool_call":
@@ -99,10 +97,7 @@ class CodexAgent(Agent):
             try:
                 with open(path, encoding="utf-8", errors="replace") as f:
                     meta = json.loads(f.readline())
-                if (
-                    meta.get("type") == "session_meta"
-                    and meta.get("payload", {}).get("cwd") == cwd
-                ):
+                if meta.get("type") == "session_meta" and meta.get("payload", {}).get("cwd") == cwd:
                     return path
             except (OSError, json.JSONDecodeError):
                 continue

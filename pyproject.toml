@@ -23,7 +23,7 @@ ostinote = ["prompts/*.txt", "assets/*"]
 
 [tool.ruff]
 target-version = "py311"
-line-length = 95
+line-length = 120
 
 [tool.ruff.lint]
 select = [

@@ -85,9 +85,7 @@ def run_save(
         lock.release()
 
 
-def _save_locked(
-    env: Env, agent, session_id: str, transcript_path: str, force: bool, dry: bool, final: bool
-) -> int:
+def _save_locked(env: Env, agent, session_id: str, transcript_path: str, force: bool, dry: bool, final: bool) -> int:
     state = SessionState.load(env.sessions_dir, agent.name, session_id)
     state.transcript_path = transcript_path
 
@@ -226,12 +224,7 @@ def staging_files(env: Env) -> list[str]:
     except OSError:
         return out
     for name in names:
-        if (
-            name.startswith("today-")
-            and name.endswith(".md")
-            and not name.endswith(".done.md")
-            and name != today_name
-        ):
+        if name.startswith("today-") and name.endswith(".md") and not name.endswith(".done.md") and name != today_name:
             out.append(os.path.join(env.data_dir, name))
     return out
 
@@ -268,9 +261,7 @@ def run_consolidation(env: Env) -> int:
         cfg["summarizer"] = dict(env.cfg["summarizer"])
         cfg["summarizer"]["timeout"] = max(180, cfg["summarizer"]["timeout"])
         try:
-            result = summarize.call_model(
-                prompts.build_consolidation_prompt(contents, recent, archive, core), cfg
-            )
+            result = summarize.call_model(prompts.build_consolidation_prompt(contents, recent, archive, core), cfg)
         except RuntimeError as e:
             env.log("consolidation", "ERROR: %s" % e)
             return 1

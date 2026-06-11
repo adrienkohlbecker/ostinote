@@ -21,9 +21,7 @@ def get_agent(name: str) -> Agent:
     try:
         return _AGENTS[name]
     except KeyError:
-        raise ValueError(
-            "unknown agent %r (known: %s)" % (name, ", ".join(sorted(_AGENTS)))
-        ) from None
+        raise ValueError("unknown agent %r (known: %s)" % (name, ", ".join(sorted(_AGENTS)))) from None
 
 
 def agent_names() -> list:

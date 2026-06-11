@@ -26,9 +26,7 @@ def build_compress_prompt(now_content: str) -> str:
     return _read("compress-daily.prompt.txt").replace("{{NOW_CONTENT}}", now_content)
 
 
-def build_consolidation_prompt(
-    staging: dict[str, str], recent: str, archive: str, core: str
-) -> str:
+def build_consolidation_prompt(staging: dict[str, str], recent: str, archive: str, core: str) -> str:
     staging_section = ""
     for filename in sorted(staging):
         staging_section += "\n--- %s ---\n%s\n" % (filename, staging[filename])

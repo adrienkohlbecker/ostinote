@@ -144,9 +144,7 @@ class Env:
         except OSError:
             pass
 
-    def log_tokens(
-        self, component: str, tk_in: int, tk_out: int, tk_cache: int, cost: float
-    ) -> None:
+    def log_tokens(self, component: str, tk_in: int, tk_out: int, tk_cache: int, cost: float) -> None:
         detail = "tokens: %d+%dcache→%dout" % (tk_in, tk_cache, tk_out)
         if cost:
             detail += " ($%.6f)" % cost
@@ -159,11 +157,7 @@ class Env:
             removed = 0
             for name in sorted(os.listdir(self.logs_dir)):
                 path = os.path.join(self.logs_dir, name)
-                if (
-                    name.startswith("memory-")
-                    and name.endswith(".log")
-                    and os.path.getmtime(path) < cutoff
-                ):
+                if name.startswith("memory-") and name.endswith(".log") and os.path.getmtime(path) < cutoff:
                     os.remove(path)
                     removed += 1
             if removed:

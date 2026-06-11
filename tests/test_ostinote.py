@@ -83,9 +83,7 @@ def codex_transcript(tmp_path):
             {
                 "type": "message",
                 "role": "user",
-                "content": [
-                    {"type": "input_text", "text": "# AGENTS.md instructions for /proj\nstuff"}
-                ],
+                "content": [{"type": "input_text", "text": "# AGENTS.md instructions for /proj\nstuff"}],
             }
         ),
         _codex_item(
@@ -314,14 +312,10 @@ def test_recovery_skips_fully_saved_transcripts(tmp_path, monkeypatch):
 
 def test_config_project_overrides(tmp_path, monkeypatch):
     monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", str(tmp_path / "user.json"))
-    (tmp_path / "user.json").write_text(
-        json.dumps({"cooldowns": {"save_seconds": 60}, "timezone": "UTC"})
-    )
+    (tmp_path / "user.json").write_text(json.dumps({"cooldowns": {"save_seconds": 60}, "timezone": "UTC"}))
     proj = tmp_path / "proj"
     (proj / ".ostinote").mkdir(parents=True)
-    (proj / ".ostinote" / "config.json").write_text(
-        json.dumps({"cooldowns": {"save_seconds": 30}})
-    )
+    (proj / ".ostinote" / "config.json").write_text(json.dumps({"cooldowns": {"save_seconds": 30}}))
     cfg = config_mod.load(str(proj))
     assert cfg["cooldowns"]["save_seconds"] == 30
     assert cfg["cooldowns"]["compress_seconds"] == 3600  # default survives
@@ -478,10 +472,7 @@ def test_codex_install_adds_memory_dir_to_writable_roots(tmp_path, monkeypatch):
     config = home / ".codex" / "config.toml"
     config.parent.mkdir(parents=True)
     config.write_text(
-        'model = "gpt-5"\n\n'
-        "[sandbox_workspace_write]\n"
-        'writable_roots = ["~/already"]\n'
-        "network_access = true\n",
+        'model = "gpt-5"\n\n[sandbox_workspace_write]\nwritable_roots = ["~/already"]\nnetwork_access = true\n',
         encoding="utf-8",
     )
 
@@ -511,9 +502,7 @@ def test_codex_install_refuses_invalid_toml(tmp_path, monkeypatch):
 
     report = install_mod.install("codex", "project", root)
 
-    assert any(
-        line.startswith("ERROR: could not update Codex writable roots") for line in report
-    )
+    assert any(line.startswith("ERROR: could not update Codex writable roots") for line in report)
     assert config.read_text(encoding="utf-8") == "[sandbox_workspace_write\n"
 
 
@@ -673,12 +662,8 @@ def test_costs_day_totals(tmp_path):
         "12:31:00 [hook] not a token line\n",
         encoding="utf-8",
     )
-    (logs / "memory-2026-06-10.log").write_text(
-        "09:00:00 [hook] no calls today\n", encoding="utf-8"
-    )
-    (logs / "background.log").write_text(
-        "[save] tokens: 9+9cache→9out ($9)\n", encoding="utf-8"
-    )
+    (logs / "memory-2026-06-10.log").write_text("09:00:00 [hook] no calls today\n", encoding="utf-8")
+    (logs / "background.log").write_text("[save] tokens: 9+9cache→9out ($9)\n", encoding="utf-8")
 
     days = costs.day_totals(str(logs))
     assert [d for d, _ in days] == ["2026-06-09"]  # only daily logs with calls
@@ -713,9 +698,7 @@ def test_doctor_smoke(tmp_path, monkeypatch, capsys):
         doctor_mod,
         "_hooks_file_for",
         lambda agent, scope, root: (
-            project_only(agent, scope, root)
-            if scope == "project"
-            else str(tmp_path / "no-user-hooks.json")
+            project_only(agent, scope, root) if scope == "project" else str(tmp_path / "no-user-hooks.json")
         ),
     )
 

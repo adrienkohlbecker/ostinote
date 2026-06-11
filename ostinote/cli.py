@@ -49,32 +49,24 @@ def main(argv=None) -> None:
     p_save.add_argument("--session", default=None)
     p_save.add_argument("--transcript", default=None)
     p_save.add_argument("--cwd", default=None)
-    p_save.add_argument(
-        "--force", action="store_true", help="bypass cooldown and min-message threshold"
-    )
+    p_save.add_argument("--force", action="store_true", help="bypass cooldown and min-message threshold")
     p_save.add_argument(
         "--final",
         action="store_true",
         help="end-of-session save: bypass cooldown, keep min-message threshold",
     )
-    p_save.add_argument(
-        "--dry", action="store_true", help="print the extract, skip the model call"
-    )
+    p_save.add_argument("--dry", action="store_true", help="print the extract, skip the model call")
 
     p_cons = sub.add_parser("consolidate", help="compress past days into recent/archive")
     p_cons.add_argument("--cwd", default=None)
 
     p_status = sub.add_parser("status", help="show memory state")
     p_status.add_argument("--cwd", default=None)
-    p_status.add_argument(
-        "--costs", action="store_true", help="show per-day token usage and cost instead"
-    )
+    p_status.add_argument("--costs", action="store_true", help="show per-day token usage and cost instead")
 
     p_doctor = sub.add_parser("doctor", help="check the whole pipeline, loudly")
     p_doctor.add_argument("--cwd", default=None)
-    p_doctor.add_argument(
-        "--live", action="store_true", help="also run one real (paid) summarizer call"
-    )
+    p_doctor.add_argument("--live", action="store_true", help="also run one real (paid) summarizer call")
 
     for name in ("install", "uninstall"):
         p = sub.add_parser(name, help="%s hooks for an agent" % name)
@@ -128,9 +120,7 @@ def main(argv=None) -> None:
         root = os.path.abspath(args.cwd or os.getcwd())
         targets = agent_names() if args.agent == "all" else [args.agent]
         for agent in targets:
-            for line in install_mod.install(
-                agent, args.scope, root, remove=args.command == "uninstall"
-            ):
+            for line in install_mod.install(agent, args.scope, root, remove=args.command == "uninstall"):
                 print(line)
 
 
@@ -209,10 +199,7 @@ def _costs(env: Env) -> None:
     for day, t in days:
         for key in total:
             total[key] += t[key]
-        print(
-            "%-12s %6d %12d %12d %10d %10s"
-            % (day, t["calls"], t["input"], t["cache"], t["output"], _usd(t["cost"]))
-        )
+        print("%-12s %6d %12d %12d %10d %10s" % (day, t["calls"], t["input"], t["cache"], t["output"], _usd(t["cost"])))
     print(
         "%-12s %6d %12d %12d %10d %10s"
         % (

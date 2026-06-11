@@ -65,10 +65,7 @@ def call_model(prompt: str, cfg: dict) -> ModelResult:
 
     # Safety net for custom summarizer.command values: a claude invocation
     # must never persist its transcript into ~/.claude/projects/.
-    if (
-        os.path.basename(command[0]).startswith("claude")
-        and "--no-session-persistence" not in command
-    ):
+    if os.path.basename(command[0]).startswith("claude") and "--no-session-persistence" not in command:
         command.append("--no-session-persistence")
 
     # CLAUDECODE blocks nested claude sessions when run from a Claude hook.
@@ -90,9 +87,7 @@ def call_model(prompt: str, cfg: dict) -> ModelResult:
         raise RuntimeError("summarizer failed to start: %s" % e) from e
 
     if result.returncode != 0:
-        raise RuntimeError(
-            "summarizer exited %d: %s" % (result.returncode, result.stderr.strip()[:300])
-        )
+        raise RuntimeError("summarizer exited %d: %s" % (result.returncode, result.stderr.strip()[:300]))
 
     return parse_response(result.stdout)
 
@@ -104,9 +99,7 @@ def parse_response(raw: str) -> ModelResult:
         data = json.loads(raw)
     except json.JSONDecodeError:
         # Plain-text engine: take stdout verbatim.
-        return ModelResult(
-            text=raw, tokens=TokenUsage(), is_skip=raw.upper().startswith("SKIP")
-        )
+        return ModelResult(text=raw, tokens=TokenUsage(), is_skip=raw.upper().startswith("SKIP"))
 
     if isinstance(data, list):
         # claude CLI v2.1.86+ may emit a list of message objects.
@@ -122,11 +115,7 @@ def parse_response(raw: str) -> ModelResult:
                 text = content
                 break
             if isinstance(content, list):
-                parts = [
-                    b.get("text", "")
-                    for b in content
-                    if isinstance(b, dict) and b.get("type") == "text"
-                ]
+                parts = [b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"]
                 if parts:
                     text = "\n".join(parts)
                     break
@@ -137,18 +126,14 @@ def parse_response(raw: str) -> ModelResult:
     else:
         text, tokens = str(data), TokenUsage()
 
-    return ModelResult(
-        text=text, tokens=tokens, is_skip=text.strip().upper().startswith("SKIP")
-    )
+    return ModelResult(text=text, tokens=tokens, is_skip=text.strip().upper().startswith("SKIP"))
 
 
 def _extract_tokens(data: dict) -> TokenUsage:
     usage = data.get("usage", {}) if isinstance(data.get("usage"), dict) else {}
     tk_in = usage.get("input_tokens", 0) or data.get("input_tokens", 0) or 0
     tk_out = usage.get("output_tokens", 0) or data.get("output_tokens", 0) or 0
-    tk_cache = (
-        usage.get("cache_read_input_tokens", 0) or data.get("cache_read_input_tokens", 0) or 0
-    )
+    tk_cache = usage.get("cache_read_input_tokens", 0) or data.get("cache_read_input_tokens", 0) or 0
     # Cost only when the engine reports it — no fallback price table to rot.
     cost = data.get("total_cost_usd") or 0.0
     return TokenUsage(input=tk_in, output=tk_out, cache=tk_cache, cost_usd=cost)

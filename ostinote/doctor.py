@@ -56,9 +56,7 @@ def _check_config(env: Env, results: list) -> None:
             results.append(("ok", "config readable: %s" % path))
         except (OSError, json.JSONDecodeError) as e:
             # The config loader silently ignores broken files — say it here.
-            results.append(
-                ("FAIL", "config unreadable (silently ignored!): %s — %s" % (path, e))
-            )
+            results.append(("FAIL", "config unreadable (silently ignored!): %s — %s" % (path, e)))
 
 
 def _check_data_dir(env: Env, results: list) -> None:
@@ -90,15 +88,12 @@ def _check_hooks(agent: str, env: Env, results: list) -> None:
                         registered.add(event)
     missing = expected - registered
     if not registered:
-        results.append(
-            ("warn", "%s: no hooks registered — run `ostinote install %s`" % (agent, agent))
-        )
+        results.append(("warn", "%s: no hooks registered — run `ostinote install %s`" % (agent, agent)))
     elif missing:
         results.append(
             (
                 "FAIL",
-                "%s: hooks missing %s — rerun `ostinote install %s`"
-                % (agent, ", ".join(sorted(missing)), agent),
+                "%s: hooks missing %s — rerun `ostinote install %s`" % (agent, ", ".join(sorted(missing)), agent),
             )
         )
     else:
@@ -151,9 +146,7 @@ def _check_locks(env: Env, results: list) -> None:
 
 def _check_sessions(env: Env, results: list) -> None:
     states = all_states(env.sessions_dir)
-    gone = sum(
-        1 for s in states if s.transcript_path and not os.path.exists(s.transcript_path)
-    )
+    gone = sum(1 for s in states if s.transcript_path and not os.path.exists(s.transcript_path))
     note = " (%d with deleted transcripts)" % gone if gone else ""
     results.append(("ok", "%d tracked session(s)%s" % (len(states), note)))
     staging = staging_files(env)

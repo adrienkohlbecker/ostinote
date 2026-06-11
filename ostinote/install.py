@@ -65,10 +65,7 @@ def _format_command(argv: list[str]) -> str:
     if os.name == "nt":
         bad = [part for part in argv if any(char in part for char in _WINDOWS_CMD_METACHARS)]
         if bad:
-            raise _ConfigError(
-                "cannot safely render Windows hook command part with cmd.exe metacharacter: %s"
-                % bad[0]
-            )
+            raise _ConfigError("cannot safely render Windows hook command part with cmd.exe metacharacter: %s" % bad[0])
         return subprocess.list2cmdline(argv)
     return shlex.join(argv)
 
@@ -112,9 +109,7 @@ def _read_json(path: str) -> dict:
     except FileNotFoundError:
         return {}
     except json.JSONDecodeError as e:
-        raise _ConfigError(
-            "invalid JSON in %s at line %d column %d: %s" % (path, e.lineno, e.colno, e.msg)
-        ) from e
+        raise _ConfigError("invalid JSON in %s at line %d column %d: %s" % (path, e.lineno, e.colno, e.msg)) from e
     except OSError as e:
         raise _ConfigError("cannot read %s: %s" % (path, e)) from e
     if not isinstance(data, dict):
@@ -129,9 +124,7 @@ def _write_json(path: str, data: dict) -> None:
 
 def _write_text_atomic(path: str, text: str) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    fd, tmp = tempfile.mkstemp(
-        prefix=".ostinote-", suffix=".tmp", dir=os.path.dirname(path), text=True
-    )
+    fd, tmp = tempfile.mkstemp(prefix=".ostinote-", suffix=".tmp", dir=os.path.dirname(path), text=True)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(text)
@@ -154,9 +147,7 @@ def _update_hooks(settings: dict, agent: str, remove_only: bool = False) -> dict
     for event, subcommand in _events_for(agent).items():
         kept_groups = _strip_managed_hooks(hooks.get(event, []))
         if not remove_only:
-            kept_groups.append(
-                {"hooks": [{"type": "command", "command": _command_str(subcommand, agent)}]}
-            )
+            kept_groups.append({"hooks": [{"type": "command", "command": _command_str(subcommand, agent)}]})
         if kept_groups:
             hooks[event] = kept_groups
         else:
@@ -193,17 +184,9 @@ def _strip_managed_hooks(groups) -> list:
 
 def _hooks_file_for(agent: str, scope: str, project_root: str) -> str:
     if agent == "claude":
-        base = (
-            os.path.expanduser("~/.claude")
-            if scope == "user"
-            else os.path.join(project_root, ".claude")
-        )
+        base = os.path.expanduser("~/.claude") if scope == "user" else os.path.join(project_root, ".claude")
         return os.path.join(base, "settings.json")
-    base = (
-        os.path.expanduser("~/.codex")
-        if scope == "user"
-        else os.path.join(project_root, ".codex")
-    )
+    base = os.path.expanduser("~/.codex") if scope == "user" else os.path.join(project_root, ".codex")
     return os.path.join(base, "hooks.json")
 
 
@@ -219,9 +202,7 @@ def install(agent: str, scope: str, project_root: str, remove: bool = False) -> 
             report.append("ERROR: %s" % e)
             return report
         _write_json(path, settings)
-        report.append(
-            "%s hooks %s: %s" % (agent, "removed from" if remove else "registered in", path)
-        )
+        report.append("%s hooks %s: %s" % (agent, "removed from" if remove else "registered in", path))
 
     # The ostinote core-memory command, as a skill (same file for both agents).
     base, invoke = _SKILLS[agent]
@@ -258,9 +239,7 @@ def _ensure_codex_writable_root(project_root: str) -> str:
         sandbox = {}
         config["sandbox_workspace_write"] = sandbox
     elif not isinstance(sandbox, dict):
-        raise _ConfigError(
-            "invalid TOML in %s: sandbox_workspace_write must be a table" % config_path
-        )
+        raise _ConfigError("invalid TOML in %s: sandbox_workspace_write must be a table" % config_path)
 
     roots = sandbox.get("writable_roots")
     if roots is None:
@@ -268,8 +247,7 @@ def _ensure_codex_writable_root(project_root: str) -> str:
         sandbox["writable_roots"] = roots
     elif not isinstance(roots, list) or not all(isinstance(item, str) for item in roots):
         raise _ConfigError(
-            "invalid TOML in %s: sandbox_workspace_write.writable_roots "
-            "must be an array of strings" % config_path
+            "invalid TOML in %s: sandbox_workspace_write.writable_roots must be an array of strings" % config_path
         )
 
     if _root_list_has_value(roots, root):
@@ -380,7 +358,6 @@ def _warnings(agent: str, remove: bool) -> list[str]:
                 )
     else:
         warnings.append(
-            "NOTE: Codex asks you to trust new hooks on first use — accept "
-            "the prompt in your next codex session."
+            "NOTE: Codex asks you to trust new hooks on first use — accept the prompt in your next codex session."
         )
     return warnings

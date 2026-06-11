@@ -279,8 +279,7 @@ def post_tool(agent_name: str) -> None:
 
     env.log(
         "hook",
-        "post-tool (%s): delta %d lines, queueing save of %s"
-        % (agent_name, delta, session_id),
+        "post-tool (%s): delta %d lines, queueing save of %s" % (agent_name, delta, session_id),
     )
     spawn(
         env,

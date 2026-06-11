@@ -33,9 +33,7 @@ class SessionState:
 
     @classmethod
     def load(cls, sessions_dir: str, agent: str, session_id: str) -> SessionState:
-        path = os.path.join(
-            sessions_dir, "%s--%s.json" % (_sanitize(agent), _sanitize(session_id))
-        )
+        path = os.path.join(sessions_dir, "%s--%s.json" % (_sanitize(agent), _sanitize(session_id)))
         state = cls(path, agent, session_id)
         try:
             with open(path, encoding="utf-8") as f:
@@ -83,9 +81,7 @@ def all_states(sessions_dir: str) -> list[SessionState]:
                 data = json.load(f)
         except (OSError, json.JSONDecodeError):
             continue
-        state = SessionState.load(
-            sessions_dir, data.get("agent", "?"), data.get("session_id", "?")
-        )
+        state = SessionState.load(sessions_dir, data.get("agent", "?"), data.get("session_id", "?"))
         states.append(state)
     return states
 
