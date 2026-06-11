@@ -1,6 +1,7 @@
 import json
 import os
 import time
+import tomllib
 
 import pytest
 
@@ -490,9 +491,30 @@ def test_codex_install_adds_memory_dir_to_writable_roots(tmp_path, monkeypatch):
 
     expected = "~/.ostinote/projects/%s" % re.sub(r"[^a-zA-Z0-9]", "-", root)
     text = config.read_text(encoding="utf-8")
-    assert text.count(expected) == 1
-    assert "network_access = true" in text
-    assert '"~/already"' in text
+    data = tomllib.loads(text)
+    sandbox = data["sandbox_workspace_write"]
+    assert sandbox["writable_roots"].count(expected) == 1
+    assert sandbox["network_access"] is True
+    assert "~/already" in sandbox["writable_roots"]
+
+
+def test_codex_install_refuses_invalid_toml(tmp_path, monkeypatch):
+    from ostinote import install as install_mod
+
+    home = _installer_home(tmp_path, monkeypatch)
+    monkeypatch.setattr(install_mod, "self_command", lambda: ["/usr/bin/ostinote"])
+    root = str(tmp_path / "proj")
+    (tmp_path / "proj").mkdir()
+    config = home / ".codex" / "config.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text("[sandbox_workspace_write\n", encoding="utf-8")
+
+    report = install_mod.install("codex", "project", root)
+
+    assert any(
+        line.startswith("ERROR: could not update Codex writable roots") for line in report
+    )
+    assert config.read_text(encoding="utf-8") == "[sandbox_workspace_write\n"
 
 
 def test_install_refuses_invalid_hook_json(tmp_path, monkeypatch):

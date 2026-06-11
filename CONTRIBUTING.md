@@ -15,7 +15,7 @@ mise run lint       # ruff check + format check (same as CI)
 mise run fix        # auto-fix lint findings and reformat
 ```
 
-Without mise: any Python 3.9+, `pip install -e '.[dev]'`, then `pytest`, `ruff check .`, `ruff format .`.
+Without mise: any Python 3.11+, `pip install -e '.[dev]'`, then `pytest`, `ruff check .`, `ruff format .`.
 
 Useful while hacking:
 

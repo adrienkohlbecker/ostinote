@@ -312,7 +312,7 @@ def parse_consolidation_response(text: str):
     if len(parts) == 1:
         sections["RECENT"] = text
     else:
-        for marker, content in zip(parts[1::2], parts[2::2]):
+        for marker, content in zip(parts[1::2], parts[2::2], strict=False):
             sections[marker] = content
 
     recent = _strip_fences(sections["RECENT"])

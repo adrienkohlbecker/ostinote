@@ -7,15 +7,11 @@ local zone is used. An empty/invalid zone never silently becomes UTC.
 from __future__ import annotations
 
 import datetime
-
-try:
-    from zoneinfo import ZoneInfo
-except ImportError:  # pragma: no cover - python < 3.9
-    ZoneInfo = None  # type: ignore[assignment]
+from zoneinfo import ZoneInfo
 
 
 def get_tz(name: str) -> ZoneInfo | None:
-    if not name or ZoneInfo is None:
+    if not name:
         return None
     try:
         return ZoneInfo(name)

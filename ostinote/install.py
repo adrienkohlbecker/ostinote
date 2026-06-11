@@ -20,11 +20,11 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shlex
 import shutil
 import subprocess
 import tempfile
+import tomllib
 
 from .env import Env
 from .hooks import self_command
@@ -242,7 +242,7 @@ def install(agent: str, scope: str, project_root: str, remove: bool = False) -> 
         if agent == "codex":
             try:
                 report.append(_ensure_codex_writable_root(project_root))
-            except OSError as e:
+            except (OSError, _ConfigError) as e:
                 report.append("ERROR: could not update Codex writable roots: %s" % e)
 
     report.extend(_warnings(agent, remove))
@@ -252,18 +252,101 @@ def install(agent: str, scope: str, project_root: str, remove: bool = False) -> 
 def _ensure_codex_writable_root(project_root: str) -> str:
     config_path = os.path.expanduser("~/.codex/config.toml")
     root = _home_relative(Env(project_root).data_dir)
+    config = _read_toml(config_path)
+    sandbox = config.get("sandbox_workspace_write")
+    if sandbox is None:
+        sandbox = {}
+        config["sandbox_workspace_write"] = sandbox
+    elif not isinstance(sandbox, dict):
+        raise _ConfigError(
+            "invalid TOML in %s: sandbox_workspace_write must be a table" % config_path
+        )
+
+    roots = sandbox.get("writable_roots")
+    if roots is None:
+        roots = []
+        sandbox["writable_roots"] = roots
+    elif not isinstance(roots, list) or not all(isinstance(item, str) for item in roots):
+        raise _ConfigError(
+            "invalid TOML in %s: sandbox_workspace_write.writable_roots "
+            "must be an array of strings" % config_path
+        )
+
+    if _root_list_has_value(roots, root):
+        return "codex writable root already present: %s" % root
+
+    roots.append(root)
+    _write_text_atomic(config_path, _format_toml(config))
+    return "codex writable root added: %s" % root
+
+
+def _read_toml(path: str) -> dict:
     try:
-        with open(config_path, encoding="utf-8") as f:
-            content = f.read()
+        with open(path, "rb") as f:
+            return tomllib.load(f)
     except FileNotFoundError:
-        content = ""
-    new_content, changed = _append_toml_array_value(
-        content, "sandbox_workspace_write", "writable_roots", root
-    )
-    if changed:
-        _write_text_atomic(config_path, new_content)
-        return "codex writable root added: %s" % root
-    return "codex writable root already present: %s" % root
+        return {}
+    except tomllib.TOMLDecodeError as e:
+        raise _ConfigError("invalid TOML in %s: %s" % (path, e)) from e
+
+
+def _format_toml(data: dict) -> str:
+    lines: list[str] = []
+    _append_toml_lines(lines, data, ())
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _append_toml_lines(lines: list[str], table: dict, path: tuple[str, ...]) -> None:
+    scalars = [(key, value) for key, value in table.items() if not isinstance(value, dict)]
+    subtables = [(key, value) for key, value in table.items() if isinstance(value, dict)]
+    if path:
+        if lines:
+            lines.append("")
+        lines.append("[%s]" % ".".join(_toml_key(part) for part in path))
+    for key, value in scalars:
+        lines.extend(_format_toml_assignment(key, value))
+    for key, value in subtables:
+        _append_toml_lines(lines, value, (*path, key))
+
+
+def _format_toml_assignment(key: str, value) -> list[str]:
+    if isinstance(value, list):
+        lines = ["%s = [" % _toml_key(key)]
+        for item in value:
+            lines.append("  %s," % _toml_value(item))
+        lines.append("]")
+        return lines
+    return ["%s = %s" % (_toml_key(key), _toml_value(value))]
+
+
+def _toml_value(value) -> str:
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=False)
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value).lower()
+    if isinstance(value, list):
+        return "[%s]" % ", ".join(_toml_value(item) for item in value)
+    raise _ConfigError("cannot write unsupported TOML value: %r" % (value,))
+
+
+def _toml_key(key: str) -> str:
+    if key and all(char.isalnum() or char in "-_" for char in key):
+        return key
+    return json.dumps(key, ensure_ascii=False)
+
+
+def _root_list_has_value(values: list[str], value: str) -> bool:
+    target = _normalized_root(value)
+    for existing in values:
+        if existing == value or _normalized_root(existing) == target:
+            return True
+    return False
+
+
+def _normalized_root(value: str) -> str:
+    return os.path.normcase(os.path.abspath(os.path.expanduser(value)))
 
 
 def _home_relative(path: str) -> str:
@@ -276,121 +359,6 @@ def _home_relative(path: str) -> str:
     except ValueError:
         pass
     return path
-
-
-def _append_toml_array_value(
-    content: str, section: str, key: str, value: str
-) -> tuple[str, bool]:
-    values = _toml_array_values(content, section, key)
-    if _toml_has_value(values, value):
-        return content, False
-    values.append(value)
-    lines = content.splitlines(True)
-    start, end = _toml_section_bounds(lines, section)
-    array = _format_toml_array(key, values, "")
-    if start is None:
-        prefix = content
-        if prefix and not prefix.endswith("\n"):
-            prefix += "\n"
-        if prefix:
-            prefix += "\n"
-        return prefix + "[%s]\n%s" % (section, array), True
-    key_idx = _toml_key_index(lines, start + 1, end, key)
-    if key_idx is None:
-        new_lines = lines[:end] + [array] + lines[end:]
-        return "".join(new_lines), True
-    close_idx = _toml_array_close_index(lines, key_idx)
-    indent = lines[key_idx][: len(lines[key_idx]) - len(lines[key_idx].lstrip())]
-    array = _format_toml_array(key, values, indent)
-    return "".join(lines[:key_idx] + [array] + lines[close_idx + 1 :]), True
-
-
-def _toml_has_value(values: list[str], value: str) -> bool:
-    target = _normalized_root(value)
-    for existing in values:
-        if existing == value or _normalized_root(existing) == target:
-            return True
-    return False
-
-
-def _normalized_root(value: str) -> str:
-    return os.path.normcase(os.path.abspath(os.path.expanduser(value)))
-
-
-def _toml_array_values(content: str, section: str, key: str) -> list[str]:
-    try:
-        import tomllib  # type: ignore[import-not-found]
-
-        table = tomllib.loads(content).get(section, {})
-        values = table.get(key, []) if isinstance(table, dict) else []
-        if isinstance(values, list):
-            return [value for value in values if isinstance(value, str)]
-    except Exception:
-        pass
-    lines = content.splitlines(True)
-    start, end = _toml_section_bounds(lines, section)
-    if start is None:
-        return []
-    key_idx = _toml_key_index(lines, start + 1, end, key)
-    if key_idx is None:
-        return []
-    close_idx = _toml_array_close_index(lines, key_idx)
-    text = "".join(lines[key_idx : close_idx + 1])
-    values = []
-    for match in re.finditer(r'"((?:\\.|[^"\\])*)"|\'([^\']*)\'', text):
-        token = match.group(0)
-        if token.startswith("'"):
-            values.append(token[1:-1])
-            continue
-        try:
-            values.append(json.loads(token))
-        except json.JSONDecodeError:
-            pass
-    return values
-
-
-def _toml_section_bounds(lines: list[str], section: str):
-    start = None
-    for idx, line in enumerate(lines):
-        name = _toml_section_name(line)
-        if name is None:
-            continue
-        if start is not None:
-            return start, idx
-        if name == section:
-            start = idx
-    return start, len(lines)
-
-
-def _toml_section_name(line: str):
-    head = line.split("#", 1)[0].strip()
-    if head.startswith("[[") or not (head.startswith("[") and head.endswith("]")):
-        return None
-    return head[1:-1].strip()
-
-
-def _toml_key_index(lines: list[str], start: int, end: int, key: str):
-    for idx in range(start, end):
-        if lines[idx].split("#", 1)[0].split("=", 1)[0].strip() == key:
-            return idx
-    return None
-
-
-def _toml_array_close_index(lines: list[str], start: int) -> int:
-    depth = 0
-    for idx in range(start, len(lines)):
-        depth += lines[idx].count("[") - lines[idx].count("]")
-        if depth <= 0 and "[" in lines[start]:
-            return idx
-    return start
-
-
-def _format_toml_array(key: str, values: list[str], indent: str) -> str:
-    lines = ["%s%s = [\n" % (indent, key)]
-    for value in values:
-        lines.append("%s  %s,\n" % (indent, json.dumps(value, ensure_ascii=False)))
-    lines.append("%s]\n" % indent)
-    return "".join(lines)
 
 
 def _warnings(agent: str, remove: bool) -> list[str]:
