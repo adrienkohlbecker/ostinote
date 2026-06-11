@@ -9,6 +9,7 @@ from ostinote import config as config_mod
 from ostinote.agents import get_agent
 from ostinote.agents.claude import ClaudeAgent
 from ostinote.agents.codex import CodexAgent
+from ostinote.env import Env
 from ostinote.pipeline import _last_entry, format_exchanges, parse_consolidation_response
 from ostinote.state import PidLock, SessionState
 from ostinote.summarize import parse_response
@@ -124,6 +125,44 @@ def test_codex_parse(codex_transcript):
         ("AGENT", "[TOOL: exec_command `journalctl -b -1`]"),
         ("AGENT", "zram delayed shutdown by 90s."),
     ]
+
+
+def test_codex_parse_tool_edge_cases(tmp_path):
+    path = tmp_path / "rollout.jsonl"
+    path.write_text(
+        "\n".join(
+            [
+                _codex_item({"type": "message", "role": "developer", "content": [{"type": "text", "text": "ignore"}]}),
+                _codex_item(
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "<hook>ignore injected</hook>"}],
+                    }
+                ),
+                _codex_item(
+                    {
+                        "type": "function_call",
+                        "name": "apply_patch",
+                        "arguments": json.dumps({"path": ["a.py", "b.py"]}),
+                    }
+                ),
+                _codex_item({"type": "function_call", "name": "mystery", "arguments": "{"}),
+                _codex_item({"type": "custom_tool_call", "name": "shell", "input": "x" * 300}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    messages, total = CodexAgent().parse(str(path))
+
+    assert total == 5
+    assert messages[0] == ("AGENT", "[TOOL: apply_patch `a.py b.py`]")
+    assert messages[1] == ("AGENT", "[TOOL: mystery]")
+    assert messages[2][0] == "AGENT"
+    assert messages[2][1].startswith("[TOOL: shell ")
+    assert len(messages[2][1]) < 140
 
 
 def test_agent_registry():
@@ -322,6 +361,168 @@ def test_config_project_overrides(tmp_path, monkeypatch):
     assert cfg["timezone"] == "UTC"  # user layer survives
 
 
+def _project_env(tmp_path, monkeypatch, extra_cfg=None):
+    monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", str(tmp_path / "no-user-config.json"))
+    proj = tmp_path / "proj"
+    (proj / ".ostinote").mkdir(parents=True)
+    cfg = {
+        "data_dir": str(tmp_path / "data"),
+        "share_worktrees": False,
+        "cooldowns": {"save_seconds": 0, "compress_seconds": 0},
+        "thresholds": {"min_human_messages": 1, "delta_lines_trigger": 1},
+        "features": {"hourly_compression": False, "consolidation": True, "recovery": True},
+    }
+    if extra_cfg:
+        for key, value in extra_cfg.items():
+            if isinstance(value, dict) and isinstance(cfg.get(key), dict):
+                cfg[key].update(value)
+            else:
+                cfg[key] = value
+    (proj / ".ostinote" / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
+    return Env(str(proj))
+
+
+def _model_result(text, input_tokens=10, output_tokens=3, cache_tokens=0, cost=0.0):
+    from ostinote.summarize import ModelResult, TokenUsage
+
+    return ModelResult(
+        text=text,
+        tokens=TokenUsage(input=input_tokens, output=output_tokens, cache=cache_tokens, cost_usd=cost),
+        is_skip=text.strip().upper().startswith("SKIP"),
+    )
+
+
+# --- Pipeline -------------------------------------------------------------------------
+
+
+def test_run_save_appends_summary_and_advances_state(tmp_path, monkeypatch):
+    from ostinote import pipeline as pipeline_mod
+
+    env = _project_env(tmp_path, monkeypatch)
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(
+        "\n".join(
+            [
+                _codex_item(
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "Add startup memory"}],
+                    }
+                ),
+                _codex_item(
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "Implemented it."}],
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    prompts_seen = []
+    monkeypatch.setattr(
+        pipeline_mod.summarize,
+        "call_model",
+        lambda prompt, _cfg: prompts_seen.append(prompt) or _model_result("## 10:00 | main\nSaved startup memory"),
+    )
+
+    assert pipeline_mod.run_save(env, "codex", "s1", str(transcript)) == 0
+
+    assert (tmp_path / "data" / "now.md").read_text(encoding="utf-8") == "\n## 10:00 | main\nSaved startup memory\n"
+    state = SessionState.load(env.sessions_dir, "codex", "s1")
+    assert state.line == 2
+    assert state.transcript_path == str(transcript)
+    assert "Add startup memory" in prompts_seen[0]
+
+
+def test_run_save_skip_advances_state_without_writing(tmp_path, monkeypatch):
+    from ostinote import pipeline as pipeline_mod
+
+    env = _project_env(tmp_path, monkeypatch)
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(
+        _codex_item(
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Nothing useful"}],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(pipeline_mod.summarize, "call_model", lambda _prompt, _cfg: _model_result("SKIP"))
+
+    assert pipeline_mod.run_save(env, "codex", "s1", str(transcript)) == 0
+
+    assert not (tmp_path / "data" / "now.md").exists()
+    assert SessionState.load(env.sessions_dir, "codex", "s1").line == 1
+
+
+def test_run_save_hourly_compression_moves_now_into_today(tmp_path, monkeypatch):
+    from ostinote import pipeline as pipeline_mod
+
+    env = _project_env(tmp_path, monkeypatch, {"features": {"hourly_compression": True}})
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(
+        _codex_item(
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Compress this"}],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    responses = iter(
+        [
+            _model_result("## 11:00 | main\nCaptured thing"),
+            _model_result("## 2026-06-11\nCompressed thing"),
+        ]
+    )
+    monkeypatch.setattr(pipeline_mod.summarize, "call_model", lambda _prompt, _cfg: next(responses))
+
+    assert pipeline_mod.run_save(env, "codex", "s1", str(transcript)) == 0
+
+    assert (tmp_path / "data" / "now.md").read_text(encoding="utf-8") == ""
+    assert "Compressed thing" in (tmp_path / "data" / ("today-%s.md" % env.today())).read_text(encoding="utf-8")
+
+
+def test_run_consolidation_writes_sections_and_marks_staging_done(tmp_path, monkeypatch):
+    from ostinote import pipeline as pipeline_mod
+
+    env = _project_env(tmp_path, monkeypatch)
+    env.ensure_dirs()
+    staging = tmp_path / "data" / "today-2000-01-01.md"
+    staging.write_text("## old\nA", encoding="utf-8")
+    (tmp_path / "data" / "recent.md").write_text("# Recent\n\nold recent", encoding="utf-8")
+    (tmp_path / "data" / "archive.md").write_text("# Archive\n\nold archive", encoding="utf-8")
+    seen = {}
+
+    def fake_call_model(prompt, cfg):
+        seen["prompt"] = prompt
+        seen["timeout"] = cfg["summarizer"]["timeout"]
+        return _model_result(
+            "===RECENT===\n# Recent\n\nnew recent\n===ARCHIVE===\n# Archive\n\nnew archive\n===CORE===\n- stable fact"
+        )
+
+    monkeypatch.setattr(pipeline_mod.summarize, "call_model", fake_call_model)
+
+    assert pipeline_mod.run_consolidation(env) == 0
+
+    assert "today-2000-01-01.md" in seen["prompt"]
+    assert seen["timeout"] >= 180
+    assert (tmp_path / "data" / "recent.md").read_text(encoding="utf-8") == "# Recent\n\nnew recent\n"
+    assert (tmp_path / "data" / "archive.md").read_text(encoding="utf-8") == "# Archive\n\nnew archive\n"
+    assert "- stable fact" in (tmp_path / "data" / "core-memories.md").read_text(encoding="utf-8")
+    assert not staging.exists()
+    assert (tmp_path / "data" / "today-2000-01-01.done.md").exists()
+
+
 # --- Installer -------------------------------------------------------------------------
 
 
@@ -429,6 +630,148 @@ def test_session_start_source_filter(tmp_path, monkeypatch, capsys, source, inje
         assert "something happened" in out
     else:
         assert out == ""
+
+
+def test_post_tool_registers_session_and_queues_save(tmp_path, monkeypatch):
+    import io
+
+    from ostinote import hooks as hooks_mod
+
+    env = _project_env(tmp_path, monkeypatch)
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text("{}\n{}\n{}\n", encoding="utf-8")
+    queued = []
+    monkeypatch.setattr(hooks_mod, "spawn", lambda _env, args: queued.append(args))
+    monkeypatch.setattr(
+        "sys.stdin",
+        io.StringIO(json.dumps({"cwd": env.cwd, "transcript_path": str(transcript), "session_id": "s1"})),
+    )
+
+    hooks_mod.post_tool("codex")
+
+    state = SessionState.load(env.sessions_dir, "codex", "s1")
+    assert state.transcript_path == str(transcript)
+    assert queued == [
+        [
+            "save",
+            "--agent",
+            "codex",
+            "--session",
+            "s1",
+            "--transcript",
+            str(transcript),
+            "--cwd",
+            env.cwd,
+        ]
+    ]
+
+
+def test_session_end_queues_final_save_from_transcript_basename(tmp_path, monkeypatch):
+    import io
+
+    from ostinote import hooks as hooks_mod
+
+    env = _project_env(tmp_path, monkeypatch)
+    transcript = tmp_path / "session-abc.jsonl"
+    transcript.write_text("{}\n", encoding="utf-8")
+    queued = []
+    monkeypatch.setattr(hooks_mod, "spawn", lambda _env, args: queued.append(args))
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"cwd": env.cwd, "transcript_path": str(transcript)})))
+
+    hooks_mod.session_end("claude")
+
+    assert queued == [
+        [
+            "save",
+            "--agent",
+            "claude",
+            "--session",
+            "session-abc",
+            "--transcript",
+            str(transcript),
+            "--cwd",
+            env.cwd,
+            "--final",
+        ]
+    ]
+
+
+def test_session_start_queues_consolidation_without_injecting_on_resume(tmp_path, monkeypatch, capsys):
+    import io
+
+    from ostinote import hooks as hooks_mod
+
+    env = _project_env(tmp_path, monkeypatch, {"features": {"recovery": False}})
+    env.ensure_dirs()
+    (tmp_path / "data" / "today-2000-01-01.md").write_text("old", encoding="utf-8")
+    queued = []
+    monkeypatch.setattr(hooks_mod, "spawn", lambda _env, args: queued.append(args))
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"cwd": env.cwd, "source": "resume"})))
+
+    hooks_mod.session_start("codex")
+
+    assert queued == [["consolidate", "--cwd", env.cwd]]
+    assert capsys.readouterr().out == ""
+
+
+# --- CLI ------------------------------------------------------------------------------
+
+
+def test_cli_dispatches_save_and_consolidate(tmp_path, monkeypatch):
+    from ostinote import cli as cli_mod
+
+    calls = []
+    monkeypatch.setattr(
+        cli_mod.pipeline,
+        "run_save",
+        lambda env, agent, session, transcript, force, dry, final: (
+            calls.append(("save", env.cwd, agent, session, transcript, force, dry, final)) or 7
+        ),
+    )
+    with pytest.raises(SystemExit) as save_exit:
+        cli_mod.main(
+            [
+                "save",
+                "--agent",
+                "codex",
+                "--session",
+                "s1",
+                "--transcript",
+                "t.jsonl",
+                "--cwd",
+                str(tmp_path),
+                "--force",
+                "--dry",
+            ]
+        )
+    assert save_exit.value.code == 7
+    assert calls == [("save", str(tmp_path), "codex", "s1", "t.jsonl", True, True, False)]
+
+    monkeypatch.setattr(
+        cli_mod.pipeline,
+        "run_consolidation",
+        lambda env: calls.append(("consolidate", env.cwd)) or 3,
+    )
+    with pytest.raises(SystemExit) as consolidate_exit:
+        cli_mod.main(["consolidate", "--cwd", str(tmp_path)])
+    assert consolidate_exit.value.code == 3
+    assert calls[-1] == ("consolidate", str(tmp_path))
+
+
+def test_cli_hook_failures_are_logged_and_swallowed(tmp_path, monkeypatch):
+    from argparse import Namespace
+
+    from ostinote import cli as cli_mod
+
+    errors = tmp_path / "hook-errors.log"
+    monkeypatch.setattr(cli_mod.env_mod, "HOOK_ERRORS_PATH", str(errors))
+    monkeypatch.setattr(cli_mod.hooks_mod, "post_tool", lambda _agent: (_ for _ in ()).throw(RuntimeError("boom")))
+
+    with pytest.raises(SystemExit) as exc:
+        cli_mod._run_hook(Namespace(event="post-tool", agent="codex"))
+
+    assert exc.value.code == 0
+    assert "RuntimeError: boom" in errors.read_text(encoding="utf-8")
 
 
 def test_install_preserves_foreign_hooks(tmp_path, monkeypatch):
