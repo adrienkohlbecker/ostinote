@@ -662,6 +662,32 @@ def test_uninstall_clean_project_does_not_create_hook_files(tmp_path, monkeypatc
     assert not (tmp_path / "proj" / ".agents").exists()
 
 
+def test_registered_events_tolerates_malformed_hooks(monkeypatch):
+    """Scan hook settings for managed events without crashing on bad shapes.
+
+    Expected: a hooks file whose structures are malformed (non-dict `hooks`,
+    list-typed group, string group, non-list hook array, non-dict hook) is
+    skipped rather than raising, while a well-formed managed command is still
+    recognized — so `doctor` can diagnose a hand-broken config instead of
+    dying on it.
+    """
+    from ostinote import install as install_mod
+
+    monkeypatch.setattr(install_mod, "_is_ours", lambda command: command == "OURS")
+    assert install_mod.registered_events({"hooks": "not-a-dict"}) == set()
+    settings = {
+        "hooks": {
+            "Broken": "not-a-list",
+            "Mixed": [
+                "string-group",
+                {"hooks": "not-a-list"},
+                {"hooks": ["not-a-dict", {"command": 123}, {"command": "OURS"}]},
+            ],
+        }
+    }
+    assert install_mod.registered_events(settings) == {"Mixed"}
+
+
 def test_doctor_smoke(tmp_path, monkeypatch, capsys):
     """Smoke-test `doctor` against a project with both agents installed.
 

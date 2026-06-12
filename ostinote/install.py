@@ -186,6 +186,35 @@ def _strip_managed_hooks(groups) -> list:
     return kept_groups
 
 
+def registered_events(settings: dict) -> set:
+    """Return the event names in a hooks settings dict that carry an
+    ostinote-managed hook.
+
+    Tolerates malformed hook structures (a non-dict ``hooks`` value, list-typed
+    groups, non-list hook arrays) by skipping them rather than raising, so
+    ``doctor`` can report on a hand-broken config file instead of crashing on
+    it. Shared with the installer's own recognition logic via ``_is_ours``.
+    """
+    events: set = set()
+    hooks = settings.get("hooks")
+    if not isinstance(hooks, dict):
+        return events
+    for event, groups in hooks.items():
+        if not isinstance(groups, list):
+            continue
+        for group in groups:
+            if not isinstance(group, dict):
+                continue
+            group_hooks = group.get("hooks")
+            if not isinstance(group_hooks, list):
+                continue
+            for hook in group_hooks:
+                command = hook.get("command") if isinstance(hook, dict) else None
+                if isinstance(command, str) and _is_ours(command):
+                    events.add(event)
+    return events
+
+
 def _hooks_file_for(agent: str, scope: str, project_root: str) -> str:
     if agent == "claude":
         base = os.path.expanduser("~/.claude") if scope == "user" else os.path.join(project_root, ".claude")

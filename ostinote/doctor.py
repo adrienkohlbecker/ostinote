@@ -17,7 +17,7 @@ from . import config as config_mod
 from . import summarize
 from .agents import agent_names
 from .env import HOOK_ERRORS_PATH, Env
-from .install import _events_for, _hooks_file_for, _is_ours
+from .install import _events_for, _hooks_file_for, registered_events
 from .pipeline import staging_files
 from .state import _pid_alive, all_states
 
@@ -81,11 +81,8 @@ def _check_hooks(agent: str, env: Env, results: list) -> None:
                 settings = json.load(f)
         except (OSError, json.JSONDecodeError):
             continue
-        for event, groups in settings.get("hooks", {}).items():
-            for group in groups:
-                for hook in group.get("hooks", []):
-                    if _is_ours(hook.get("command", "")):
-                        registered.add(event)
+        if isinstance(settings, dict):
+            registered |= registered_events(settings)
     missing = expected - registered
     if not registered:
         results.append(("warn", "%s: no hooks registered — run `ostinote install %s`" % (agent, agent)))
