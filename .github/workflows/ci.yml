@@ -8,9 +8,16 @@ on:
 permissions:
   contents: read
 
+# A new push to the same branch supersedes the in-flight run; the matrix's
+# macOS/Windows runners are the scarce resource.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v7
@@ -22,6 +29,7 @@ jobs:
   test:
     name: test (${{ matrix.os }}, py${{ matrix.python }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -35,4 +43,4 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: ${{ matrix.python }}
-      - run: uv run --locked --extra dev pytest -q
+      - run: uv run --locked --extra dev pytest -q --durations=10

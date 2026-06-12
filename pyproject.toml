@@ -32,7 +32,7 @@ Issues = "https://github.com/adrienkohlbecker/ostinote/issues"
 ostinote = "ostinote.cli:main"
 
 [project.optional-dependencies]
-dev = ["pytest", "ruff"]
+dev = ["pytest", "pytest-timeout", "ruff"]
 
 [build-system]
 # >=77 needed for PEP 639 SPDX license expression / license-files
@@ -68,6 +68,8 @@ minversion = "9.0"
 addopts = ["-ra", "--strict-config", "--strict-markers"]
 markers = ["functional: end-to-end subprocess tests of the real CLI"]
 filterwarnings = ["error"]
-# Dump thread tracebacks if a test (e.g. a stdin-blocked subprocess) hangs.
-faulthandler_timeout = 120
+# Kill (not just diagnose) a hung test — e.g. a stdin-blocked subprocess or a
+# lock deadlock — before it pins a CI runner for the job-level timeout;
+# pytest-timeout dumps every thread's traceback as it fails the test.
+timeout = 120
 tmp_path_retention_policy = "failed"
