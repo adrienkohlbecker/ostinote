@@ -35,7 +35,7 @@ _INJECTED_PREFIXES = (
     "Caveat:",
 )
 
-SESSIONS_ROOT = os.path.expanduser("~/.codex/sessions")
+SESSIONS_ROOT = os.path.join(os.path.expanduser("~"), ".codex", "sessions")
 
 
 class CodexAgent(Agent):
@@ -76,7 +76,9 @@ class CodexAgent(Agent):
         candidates = []
         for days_back in range(3):
             t = time.localtime(time.time() - days_back * 86400)
-            day_dir = os.path.join(SESSIONS_ROOT, time.strftime("%Y/%m/%d", t))
+            # Join the date parts as components: a "%Y/%m/%d" literal would
+            # embed forward slashes into a backslash path on Windows.
+            day_dir = os.path.join(SESSIONS_ROOT, *time.strftime("%Y %m %d", t).split(" "))
             if not os.path.isdir(day_dir):
                 continue
             for name in os.listdir(day_dir):

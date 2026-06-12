@@ -42,7 +42,9 @@ class ClaudeAgent(Agent):
         if os.name == "nt" and re.match(r"^[A-Za-z]:", cwd):
             cwd = cwd[0].lower() + cwd[1:]
         slug = re.sub(r"[^a-zA-Z0-9]", "-", cwd)
-        sdir = os.path.expanduser(os.path.join("~/.claude/projects", slug))
+        # Join from components: expanduser would leave the literal's forward
+        # slashes intact on Windows, producing a mixed-separator path.
+        sdir = os.path.join(os.path.expanduser("~"), ".claude", "projects", slug)
         files = glob.glob(os.path.join(sdir, "*.jsonl"))
         return max(files, key=os.path.getmtime) if files else None
 
