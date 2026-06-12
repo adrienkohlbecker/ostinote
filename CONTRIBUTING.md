@@ -7,7 +7,7 @@ Thanks for your interest! Bug reports, feature ideas, and pull requests are all 
 The repo uses [mise](https://mise.jdx.dev) to pin Python and uv and to expose tasks:
 
 ```bash
-git clone <this repo> && cd <repo>
+git clone https://github.com/adrienkohlbecker/ostinote && cd ostinote
 mise install        # Python + uv, creates .venv
 mise run setup      # editable install with dev deps
 mise run test       # pytest suite
@@ -38,4 +38,4 @@ Keep PRs focused on one change. Describe the user-visible behavior in the descri
 
 ## Reporting bugs
 
-Use the bug report issue template. Hook crashes land in `.ostinote/logs/hook-errors.log` and pipeline activity in `.ostinote/logs/memory-<date>.log` — including the relevant lines makes most bugs trivially diagnosable.
+Use the bug report issue template. Hook crashes land in `~/.ostinote/hook-errors.log` and pipeline activity in `logs/memory-<date>.log` inside the data dir (default `~/.ostinote/projects/<slug>/`) — including the relevant lines makes most bugs trivially diagnosable. Review and redact log lines before posting: they can contain summaries of your sessions and local paths.

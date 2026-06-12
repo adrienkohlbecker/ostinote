@@ -32,8 +32,10 @@ body:
     attributes:
       label: Relevant logs
       description: >
-        From `.ostinote/logs/memory-<date>.log` and
-        `.ostinote/logs/hook-errors.log`. Redact anything sensitive.
+        From `logs/memory-<date>.log` inside the data dir (default
+        `~/.ostinote/projects/<slug>/`) and `~/.ostinote/hook-errors.log`.
+        Redact anything sensitive — log lines can contain summaries of your
+        sessions.
       render: text
   - type: input
     id: version
