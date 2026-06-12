@@ -1,4 +1,7 @@
 import json
+import os
+import re
+import time
 
 import pytest
 
@@ -150,5 +153,70 @@ def test_agent_registry():
     """
     assert get_agent("claude").name == "claude"
     assert get_agent("codex").name == "codex"
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="unknown agent 'cursor'"):
         get_agent("cursor")
+
+
+# --- Transcript discovery --------------------------------------------------------
+
+
+def test_claude_find_latest_transcript(tmp_path, monkeypatch):
+    """Pick the newest session file from the project's Claude slug directory.
+
+    Expected: among several transcripts in `~/.claude/projects/<slug>/`, the
+    one with the most recent mtime wins — this is what `ostinote save` runs on
+    when invoked by hand — and a project with no session directory returns
+    None instead of raising.
+    """
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    cwd = str(tmp_path / "proj")
+    # Claude Code's documented slug scheme (drive letter lowercased on Windows).
+    if os.name == "nt" and re.match(r"^[A-Za-z]:", cwd):
+        cwd_for_slug = cwd[0].lower() + cwd[1:]
+    else:
+        cwd_for_slug = cwd
+    sdir = home / ".claude" / "projects" / re.sub(r"[^a-zA-Z0-9]", "-", cwd_for_slug)
+    sdir.mkdir(parents=True)
+    for name, age in (("older.jsonl", 300), ("newest.jsonl", 100)):
+        path = sdir / name
+        path.write_text("{}\n", encoding="utf-8")
+        os.utime(path, (time.time() - age, time.time() - age))
+
+    assert ClaudeAgent().find_latest_transcript(cwd) == str(sdir / "newest.jsonl")
+    assert ClaudeAgent().find_latest_transcript(str(tmp_path / "no-sessions")) is None
+
+
+def test_codex_find_latest_transcript(tmp_path, monkeypatch):
+    """Match the newest rollout whose session_meta cwd is this project.
+
+    Expected: a newer rollout belonging to a different project is skipped, an
+    unreadable first line is tolerated, and the newest matching rollout wins —
+    matching on the recorded cwd is what keeps another project's session from
+    being summarized into this project's memory. No match returns None.
+    """
+    from ostinote.agents import codex as codex_mod
+
+    root = tmp_path / "sessions"
+    monkeypatch.setattr(codex_mod, "SESSIONS_ROOT", str(root))
+    day_dir = root / time.strftime("%Y/%m/%d", time.localtime())
+    day_dir.mkdir(parents=True)
+    cwd = str(tmp_path / "proj")
+
+    def rollout(name, first_line, age):
+        path = day_dir / name
+        path.write_text(first_line + "\n", encoding="utf-8")
+        os.utime(path, (time.time() - age, time.time() - age))
+        return str(path)
+
+    def meta(meta_cwd):
+        return json.dumps({"type": "session_meta", "payload": {"id": "x", "cwd": meta_cwd}})
+
+    rollout("rollout-1.jsonl", meta(cwd), age=300)
+    matching_new = rollout("rollout-2.jsonl", meta(cwd), age=200)
+    rollout("rollout-3.jsonl", meta(str(tmp_path / "other-project")), age=100)
+    rollout("rollout-4.jsonl", "{ not json", age=50)
+
+    assert CodexAgent().find_latest_transcript(cwd) == matching_new
+    assert CodexAgent().find_latest_transcript(str(tmp_path / "nowhere")) is None
