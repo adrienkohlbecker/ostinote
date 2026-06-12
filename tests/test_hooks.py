@@ -117,6 +117,50 @@ def test_post_tool_registers_session_and_queues_save(tmp_path, monkeypatch):
     ]
 
 
+def test_post_tool_skips_small_delta(tmp_path, monkeypatch):
+    """Queue nothing when too few new transcript lines have accumulated.
+
+    Expected: with the delta at or below `delta_lines_trigger`, `post_tool`
+    still registers the session for recovery but spawns no save — this gate is
+    what keeps hooks from spawning a paid model call on every tool use.
+    """
+    env = project_env(tmp_path, monkeypatch, {"thresholds": {"delta_lines_trigger": 10}})
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text("{}\n{}\n{}\n", encoding="utf-8")
+    queued = []
+    monkeypatch.setattr(hooks_mod, "spawn", lambda _env, args: queued.append(args))
+    hook_stdin(monkeypatch, {"cwd": env.cwd, "transcript_path": str(transcript), "session_id": "s1"})
+
+    hooks_mod.post_tool("codex")
+
+    assert SessionState.load(env.sessions_dir, "codex", "s1").transcript_path == str(transcript)
+    assert queued == []
+
+
+def test_post_tool_skips_under_cooldown(tmp_path, monkeypatch):
+    """Queue nothing while the per-session save cooldown is still running.
+
+    Expected: even with enough new lines, a recent `last_attempt_ts` makes
+    `post_tool` return without spawning, so rapid tool use cannot stack up
+    background saves faster than the configured cadence.
+    """
+    env = project_env(tmp_path, monkeypatch, {"cooldowns": {"save_seconds": 1000}})
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text("{}\n{}\n{}\n", encoding="utf-8")
+    env.ensure_dirs()
+    state = SessionState.load(env.sessions_dir, "codex", "s1")
+    state.transcript_path = str(transcript)
+    state.last_attempt_ts = time.time()
+    state.save()
+    queued = []
+    monkeypatch.setattr(hooks_mod, "spawn", lambda _env, args: queued.append(args))
+    hook_stdin(monkeypatch, {"cwd": env.cwd, "transcript_path": str(transcript), "session_id": "s1"})
+
+    hooks_mod.post_tool("codex")
+
+    assert queued == []
+
+
 def test_hooks_canonicalize_transcript_path(tmp_path, monkeypatch):
     """Resolve dot-dot segments before paths reach state or subprocesses.
 
@@ -194,6 +238,30 @@ def test_session_end_queues_final_save_from_transcript_basename(tmp_path, monkey
             "--final",
         ]
     ]
+
+
+def test_session_end_skips_when_nothing_new(tmp_path, monkeypatch):
+    """Skip the final save when the transcript was already saved to its end.
+
+    Expected: with the saved line marker equal to the transcript line count,
+    `session_end` spawns nothing — this is what makes Codex's turn-scoped Stop
+    hook cheap when a turn produced no unsaved content.
+    """
+    env = project_env(tmp_path, monkeypatch)
+    transcript = tmp_path / "session-abc.jsonl"
+    transcript.write_text("{}\n{}\n", encoding="utf-8")
+    env.ensure_dirs()
+    state = SessionState.load(env.sessions_dir, "claude", "session-abc")
+    state.transcript_path = str(transcript)
+    state.line = 2
+    state.save()
+    queued = []
+    monkeypatch.setattr(hooks_mod, "spawn", lambda _env, args: queued.append(args))
+    hook_stdin(monkeypatch, {"cwd": env.cwd, "transcript_path": str(transcript)})
+
+    hooks_mod.session_end("claude")
+
+    assert queued == []
 
 
 # --- Spawn -----------------------------------------------------------------------------
@@ -298,3 +366,55 @@ def test_recovery_skips_fully_saved_transcripts(tmp_path, monkeypatch):
 
     assert hooks_mod._recover_missed(env) == 0
     assert queued == []
+
+
+def test_recovery_skips_active_transcripts(tmp_path, monkeypatch):
+    """Leave recently-changed transcripts to their own live session's hooks.
+
+    Expected: a transcript with unsaved lines but a fresh mtime is presumed to
+    belong to a running parallel session, so recovery queues nothing — saving
+    it here would race the session's own post-tool save.
+    """
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text("{}\n{}\n{}\n")  # mtime is now: looks active
+
+    env = _recovery_env(tmp_path)
+    state = SessionState.load(env.sessions_dir, "codex", "session")
+    state.transcript_path = str(transcript)
+    state.line = 1
+    state.save()
+
+    queued = []
+    monkeypatch.setattr(hooks_mod, "spawn", lambda _env, args: queued.append(args))
+
+    assert hooks_mod._recover_missed(env) == 0
+    assert queued == []
+
+
+def test_recovery_caps_queued_sessions_to_newest(tmp_path, monkeypatch):
+    """Bound recovery cost and prefer the most recent sessions.
+
+    Expected: with more recoverable sessions than `_RECOVERY_MAX`, exactly that
+    many saves are queued, chosen newest-first by transcript mtime — the cap is
+    what keeps a long-idle machine from queueing one paid save per stale
+    session at startup.
+    """
+    env = _recovery_env(tmp_path)
+    paths = []
+    for i in range(5):
+        transcript = tmp_path / ("session-%d.jsonl" % i)
+        transcript.write_text("{}\n{}\n")
+        # All idle, with distinct ages: session-0 oldest, session-4 newest.
+        mtime = time.time() - hooks_mod._RECOVERY_ACTIVE_WINDOW - 1000 + i
+        os.utime(transcript, (mtime, mtime))
+        state = SessionState.load(env.sessions_dir, "codex", "session-%d" % i)
+        state.transcript_path = str(transcript)
+        state.save()
+        paths.append(str(transcript))
+
+    queued = []
+    monkeypatch.setattr(hooks_mod, "spawn", lambda _env, args: queued.append(args))
+
+    assert hooks_mod._recover_missed(env) == hooks_mod._RECOVERY_MAX == 3
+    recovered = sorted(args[args.index("--transcript") + 1] for args in queued)
+    assert recovered == sorted(paths[2:])  # the three newest
