@@ -50,7 +50,10 @@ def _git_main_root(cwd: str) -> str:
             timeout=10,
         )
         if out.returncode == 0:
-            common = out.stdout.strip()
+            # git prints forward-slash paths even on Windows; normalize so the
+            # root (and the slug derived from it) matches an os.path-built cwd,
+            # otherwise worktree sessions would split off their own memory dir.
+            common = os.path.normpath(out.stdout.strip())
             if os.path.basename(common) == ".git":
                 return os.path.dirname(common)
     except (OSError, subprocess.TimeoutExpired):

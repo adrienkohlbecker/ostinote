@@ -303,6 +303,24 @@ def test_env_trusts_user_data_dir_anywhere(tmp_path, monkeypatch):
 # --- Worktree root resolution ------------------------------------------------------------
 
 
+def test_git_main_root_normalizes_git_output(tmp_path, monkeypatch):
+    """Normalize the path git reports before deriving the project root.
+
+    Expected: git prints forward-slash, possibly non-canonical paths (on
+    Windows too), so _git_main_root must normpath them — otherwise the slug
+    derived from a worktree's resolved root differs from the main checkout's
+    own, silently splitting the shared memory directory.
+    """
+    from ostinote import env as env_mod
+
+    # Forward slashes and a redundant segment, as git may emit them.
+    reported = "%s/repo/sub/../.git" % str(tmp_path).replace(os.sep, "/")
+    fake = subprocess.CompletedProcess(args=[], returncode=0, stdout=reported + "\n", stderr="")
+    monkeypatch.setattr(env_mod.subprocess, "run", lambda *a, **k: fake)
+
+    assert env_mod._git_main_root(str(tmp_path)) == os.path.normpath(str(tmp_path / "repo"))
+
+
 def test_env_shares_worktree_memory_with_main_checkout(tmp_path):
     """Collapse a linked git worktree onto the main checkout's memory.
 
