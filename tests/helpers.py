@@ -1,14 +1,75 @@
+import io
 import json
 import os
 import subprocess
 import sys
+import textwrap
 
 from ostinote import config as config_mod
+from ostinote import summarize
 from ostinote.env import Env
 
 
+def claude_line(msg_type, content, is_meta=False):
+    """One Claude transcript JSONL line with the given type and content."""
+    return json.dumps(
+        {
+            "type": msg_type,
+            "isMeta": is_meta,
+            "message": {"content": content},
+        }
+    )
+
+
 def codex_item(payload):
+    """One Codex rollout JSONL line wrapping the given response_item payload."""
     return json.dumps({"type": "response_item", "payload": payload})
+
+
+def codex_user(text):
+    """One Codex rollout line carrying a user message with the given text."""
+    return codex_item(
+        {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": text}],
+        }
+    )
+
+
+def codex_assistant(text):
+    """One Codex rollout line carrying an assistant message with the given text."""
+    return codex_item(
+        {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": text}],
+        }
+    )
+
+
+def hook_stdin(monkeypatch, payload):
+    """Feed a hook payload on stdin, matching how agents invoke hook handlers.
+
+    Accepts a dict (serialized to JSON) or a raw string so malformed-input
+    tests can feed garbage through the same path.
+    """
+    text = payload if isinstance(payload, str) else json.dumps(payload)
+    monkeypatch.setattr("sys.stdin", io.StringIO(text))
+
+
+def base_test_config(recovery=True):
+    """The shared project config that neutralizes save gates for tests.
+
+    Cooldowns and thresholds are zeroed so pipeline tests exercise behavior,
+    not timing; gating tests override the specific gate they probe.
+    """
+    return {
+        "share_worktrees": False,
+        "cooldowns": {"save_seconds": 0, "compress_seconds": 0},
+        "thresholds": {"min_human_messages": 1, "delta_lines_trigger": 1},
+        "features": {"hourly_compression": False, "consolidation": True, "recovery": recovery},
+    }
 
 
 def project_env(tmp_path, monkeypatch, extra_cfg=None):
@@ -20,29 +81,24 @@ def project_env(tmp_path, monkeypatch, extra_cfg=None):
     monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", str(user_cfg))
     proj = tmp_path / "proj"
     (proj / ".ostinote").mkdir(parents=True)
-    cfg = {
-        "share_worktrees": False,
-        "cooldowns": {"save_seconds": 0, "compress_seconds": 0},
-        "thresholds": {"min_human_messages": 1, "delta_lines_trigger": 1},
-        "features": {"hourly_compression": False, "consolidation": True, "recovery": True},
-    }
+    cfg = base_test_config()
     if extra_cfg:
-        for key, value in extra_cfg.items():
-            if isinstance(value, dict) and isinstance(cfg.get(key), dict):
-                cfg[key].update(value)
-            else:
-                cfg[key] = value
+        deep_update(cfg, extra_cfg)
     (proj / ".ostinote" / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
     return Env(str(proj))
 
 
 def model_result(text, input_tokens=10, output_tokens=3, cache_tokens=0, cost=0.0):
-    from ostinote.summarize import ModelResult, TokenUsage
+    """Build a fake summarizer result for pipeline tests.
 
-    return ModelResult(
+    Skip detection is derived through the SUT's own parser instead of
+    re-implementing its heuristic, so the fixture cannot drift from how the
+    pipeline really classifies a SKIP response.
+    """
+    return summarize.ModelResult(
         text=text,
-        tokens=TokenUsage(input=input_tokens, output=output_tokens, cache=cache_tokens, cost_usd=cost),
-        is_skip=text.strip().upper().startswith("SKIP"),
+        tokens=summarize.TokenUsage(input=input_tokens, output=output_tokens, cache=cache_tokens, cost_usd=cost),
+        is_skip=summarize.parse_response(text).is_skip,
     )
 
 
@@ -62,6 +118,27 @@ def deep_update(base, override):
             base[key] = value
 
 
+# Stands in for the real summarizer in functional subprocess tests: echoes
+# OSTINOTE_FAKE_RESULT as Claude-style JSON and logs the prompt it received.
+_FAKE_MODEL_SCRIPT = textwrap.dedent(
+    """\
+    import json
+    import os
+    import sys
+    prompt = sys.stdin.read()
+    prompt_log = os.environ.get('OSTINOTE_FAKE_PROMPTS')
+    if prompt_log:
+        with open(prompt_log, 'a', encoding='utf-8') as f:
+            f.write('===PROMPT===\\n' + prompt + '\\n')
+    print(json.dumps({
+        'result': os.environ['OSTINOTE_FAKE_RESULT'],
+        'usage': {'input_tokens': 11, 'output_tokens': 4, 'cache_read_input_tokens': 2},
+        'total_cost_usd': 0.00042,
+    }))
+    """
+)
+
+
 def functional_cli_project(tmp_path, extra_cfg=None):
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     home = tmp_path / "home"
@@ -70,32 +147,8 @@ def functional_cli_project(tmp_path, extra_cfg=None):
     prompt_log = tmp_path / "prompts.log"
     home.mkdir()
     (proj / ".ostinote").mkdir(parents=True)
-    model.write_text(
-        "\n".join(
-            [
-                "import json",
-                "import os",
-                "import sys",
-                "prompt = sys.stdin.read()",
-                "prompt_log = os.environ.get('OSTINOTE_FAKE_PROMPTS')",
-                "if prompt_log:",
-                "    with open(prompt_log, 'a', encoding='utf-8') as f:",
-                "        f.write('===PROMPT===\\n' + prompt + '\\n')",
-                "print(json.dumps({",
-                "    'result': os.environ['OSTINOTE_FAKE_RESULT'],",
-                "    'usage': {'input_tokens': 11, 'output_tokens': 4, 'cache_read_input_tokens': 2},",
-                "    'total_cost_usd': 0.00042,",
-                "}))",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    cfg = {
-        "share_worktrees": False,
-        "cooldowns": {"save_seconds": 0, "compress_seconds": 0},
-        "thresholds": {"min_human_messages": 1, "delta_lines_trigger": 1},
-        "features": {"hourly_compression": False, "consolidation": True, "recovery": False},
-    }
+    model.write_text(_FAKE_MODEL_SCRIPT, encoding="utf-8")
+    cfg = base_test_config(recovery=False)
     if extra_cfg:
         deep_update(cfg, extra_cfg)
     (proj / ".ostinote" / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
@@ -114,6 +167,12 @@ def functional_cli_project(tmp_path, extra_cfg=None):
     )
 
     env = os.environ.copy()
+    # A leaked CLAUDE_PROJECT_DIR (set when this suite runs inside a Claude
+    # session) is the cwd fallback for hooks — it must never point a
+    # functional subprocess at the real project being developed.
+    env.pop("CLAUDE_PROJECT_DIR", None)
+    for key in [k for k in env if k.startswith("OSTINOTE_")]:
+        env.pop(key)
     env["HOME"] = str(home)
     env["USERPROFILE"] = str(home)
     env["PYTHONPATH"] = repo_root + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")

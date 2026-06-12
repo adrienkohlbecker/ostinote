@@ -5,7 +5,7 @@ import pytest
 from ostinote.agents import get_agent
 from ostinote.agents.claude import ClaudeAgent
 from ostinote.agents.codex import CodexAgent
-from tests.helpers import codex_item
+from tests.helpers import claude_line, codex_item
 
 
 def test_claude_parse(claude_transcript):
@@ -31,8 +31,6 @@ def test_parse_skips_malformed_lines(tmp_path, capsys):
     resume offset, surrounding messages parse normally, and the skip is
     reported on stderr so spawned saves leave a trace in background.log.
     """
-    from tests.conftest import claude_line
-
     path = tmp_path / "session.jsonl"
     path.write_text(
         claude_line("user", "hello") + "\n" + '{"type": "user", "mess\n' + claude_line("user", "world") + "\n",
@@ -53,8 +51,6 @@ def test_parse_skips_non_dict_json_lines(tmp_path, capsys):
     reaching the extractor (which indexes into a dict), and surrounding
     messages still parse.
     """
-    from tests.conftest import claude_line
-
     path = tmp_path / "session.jsonl"
     path.write_text(
         claude_line("user", "hello") + "\n" + '"just a string"\n' + "[1, 2]\n",
