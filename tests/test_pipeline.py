@@ -1,3 +1,4 @@
+import os
 import time
 
 import pytest
@@ -5,7 +6,23 @@ import pytest
 from ostinote import pipeline as pipeline_mod
 from ostinote.pipeline import _append_core, _last_entry, format_exchanges, parse_consolidation_response
 from ostinote.state import SessionState
-from tests.helpers import codex_assistant, codex_user, model_result
+from tests.helpers import age_file, codex_assistant, codex_user, model_result
+
+
+def _seed_consolidation(tmp_path, env):
+    """Seed a past-day staging file plus existing recent/archive memory.
+
+    The consolidation tests differ only in the model response and its
+    aftermath, so the arrange step is shared. Returns the staging path.
+    """
+    env.ensure_dirs()
+    data = tmp_path / "data"
+    staging = data / "today-2000-01-01.md"
+    staging.write_text("## old\nA", encoding="utf-8")
+    (data / "recent.md").write_text("# Recent\n\nold recent", encoding="utf-8")
+    (data / "archive.md").write_text("# Archive\n\nold archive", encoding="utf-8")
+    return staging
+
 
 # --- Pipeline -------------------------------------------------------------------------
 
@@ -156,11 +173,12 @@ def test_run_save_hourly_compression_moves_now_into_today(tmp_path, monkeypatch,
     # The save path calls the model once for the immediate summary and once for
     # compression, so the iterator order mirrors that control flow.
     monkeypatch.setattr(pipeline_mod.summarize, "call_model", lambda _prompt, _cfg: next(responses))
+    today = env.today()  # pinned before the act so a midnight rollover can't flake the assert
 
     assert pipeline_mod.run_save(env, "codex", "s1", str(transcript)) == 0
 
     assert (tmp_path / "data" / "now.md").read_text(encoding="utf-8") == ""
-    assert "Compressed thing" in (tmp_path / "data" / ("today-%s.md" % env.today())).read_text(encoding="utf-8")
+    assert "Compressed thing" in (tmp_path / "data" / ("today-%s.md" % today)).read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("failure", ["error", "empty"], ids=["model-error", "empty-result"])
@@ -186,11 +204,12 @@ def test_run_save_failed_compression_preserves_now(tmp_path, monkeypatch, make_p
         return response
 
     monkeypatch.setattr(pipeline_mod.summarize, "call_model", fake_call_model)
+    today = env.today()  # pinned before the act so a midnight rollover can't flake the assert
 
     assert pipeline_mod.run_save(env, "codex", "s1", str(transcript)) == 0
 
     assert (tmp_path / "data" / "now.md").read_text(encoding="utf-8") == "\n## 11:00 | main\nCaptured thing\n"
-    assert not (tmp_path / "data" / ("today-%s.md" % env.today())).exists()
+    assert not (tmp_path / "data" / ("today-%s.md" % today)).exists()
 
 
 def test_run_consolidation_writes_sections_and_marks_staging_done(tmp_path, monkeypatch, make_project_env):
@@ -201,11 +220,7 @@ def test_run_consolidation_writes_sections_and_marks_staging_done(tmp_path, monk
     and the processed daily file is renamed to `.done.md`.
     """
     env = make_project_env()
-    env.ensure_dirs()
-    staging = tmp_path / "data" / "today-2000-01-01.md"
-    staging.write_text("## old\nA", encoding="utf-8")
-    (tmp_path / "data" / "recent.md").write_text("# Recent\n\nold recent", encoding="utf-8")
-    (tmp_path / "data" / "archive.md").write_text("# Archive\n\nold archive", encoding="utf-8")
+    staging = _seed_consolidation(tmp_path, env)
     seen = {}
 
     def fake_call_model(prompt, cfg):
@@ -244,11 +259,7 @@ def test_run_consolidation_failure_leaves_memory_untouched(tmp_path, monkeypatch
     silently destroy a day of memory on every bad model reply.
     """
     env = make_project_env()
-    env.ensure_dirs()
-    staging = tmp_path / "data" / "today-2000-01-01.md"
-    staging.write_text("## old\nA", encoding="utf-8")
-    (tmp_path / "data" / "recent.md").write_text("# Recent\n\nold recent", encoding="utf-8")
-    (tmp_path / "data" / "archive.md").write_text("# Archive\n\nold archive", encoding="utf-8")
+    staging = _seed_consolidation(tmp_path, env)
 
     def fake_call_model(_prompt, _cfg):
         if failure == "error":
@@ -274,10 +285,7 @@ def test_run_consolidation_missing_archive_section_keeps_archive(tmp_path, monke
     it, and still consumes the staging file.
     """
     env = make_project_env()
-    env.ensure_dirs()
-    staging = tmp_path / "data" / "today-2000-01-01.md"
-    staging.write_text("## old\nA", encoding="utf-8")
-    (tmp_path / "data" / "archive.md").write_text("# Archive\n\nold archive", encoding="utf-8")
+    staging = _seed_consolidation(tmp_path, env)
     monkeypatch.setattr(
         pipeline_mod.summarize,
         "call_model",
@@ -290,6 +298,66 @@ def test_run_consolidation_missing_archive_section_keeps_archive(tmp_path, monke
     assert (tmp_path / "data" / "archive.md").read_text(encoding="utf-8") == "# Archive\n\nold archive"
     assert not staging.exists()
     assert (tmp_path / "data" / "today-2000-01-01.done.md").exists()
+
+
+def test_run_save_skips_when_lock_held(tmp_path, monkeypatch, make_project_env):
+    """Return cleanly when another process holds the save lock.
+
+    Expected: with a live PID recorded in `save.lock`, `run_save` exits 0
+    without calling the model or touching session state — the lock is the
+    only guard against two detached saves (Claude and Codex at once)
+    interleaving writes to now.md, and returning nonzero would mark the
+    spawning hook as failed for a perfectly normal race.
+    """
+    env = make_project_env()
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(codex_user("Locked out") + "\n", encoding="utf-8")
+    env.ensure_dirs()
+    # This test process is the live holder, so the lock cannot be stolen.
+    with open(os.path.join(env.state_dir, "save.lock"), "w", encoding="utf-8") as f:
+        f.write(str(os.getpid()))
+    monkeypatch.setattr(
+        pipeline_mod.summarize,
+        "call_model",
+        lambda _prompt, _cfg: pytest.fail("a contended save must not call the model"),
+    )
+
+    assert pipeline_mod.run_save(env, "codex", "s1", str(transcript)) == 0
+
+    assert not (tmp_path / "data" / "now.md").exists()
+    state = SessionState.load(env.sessions_dir, "codex", "s1")
+    assert (state.line, state.last_attempt_ts) == (0, 0.0)
+
+
+def test_rotate_logs_drops_stale_and_caps_background(tmp_path, make_project_env):
+    """Rotate logs without touching fresh files.
+
+    Expected: a daily log older than 30 days is deleted, today's log
+    survives, an oversized background.log is emptied, and a small one is
+    left alone — consolidation runs this every time, so a boundary mistake
+    would silently destroy the silent-by-design pipeline's only diagnostic
+    surface.
+    """
+    env = make_project_env()
+    env.ensure_dirs()
+    logs = tmp_path / "data" / "logs"
+    stale = logs / "memory-2000-01-01.log"
+    stale.write_text("old", encoding="utf-8")
+    age_file(stale, 31 * 86400)
+    fresh = logs / ("memory-%s.log" % env.today())
+    fresh.write_text("fresh\n", encoding="utf-8")
+    background = logs / "background.log"
+    background.write_text("x" * (512 * 1024 + 1), encoding="utf-8")
+
+    env.rotate_logs()
+
+    assert not stale.exists()
+    assert fresh.read_text(encoding="utf-8").startswith("fresh")
+    assert background.read_text(encoding="utf-8") == ""
+
+    background.write_text("small", encoding="utf-8")
+    env.rotate_logs()
+    assert background.read_text(encoding="utf-8") == "small"
 
 
 def test_run_save_rejects_malformed_header(tmp_path, monkeypatch, make_project_env):

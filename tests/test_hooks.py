@@ -286,7 +286,10 @@ def test_spawn_creates_owner_only_background_log(tmp_path, monkeypatch, make_pro
 
     Expected: a successful spawn creates `logs/background.log` with mode 0o600,
     so summarized transcript fragments are not world-readable on shared
-    machines.
+    machines. (The memory files themselves — now.md, recent.md, … — are
+    written with umask-default permissions today; only the logs, which can
+    quote raw transcript content verbatim, are pinned owner-only. Tightening
+    memory-file modes would be a deliberate SUT change, not a test change.)
     """
     env = make_project_env()
     # Stub process creation: a real detached child would be reported by pytest
