@@ -153,8 +153,16 @@ def _save_locked(env: Env, agent, session_id: str, transcript_path: str, force: 
         env.log("model", "SKIP — position → %d" % total_lines)
         return 0
 
-    if not _HEADER_RE.match(text.splitlines()[0]):
-        env.log("validate", "WARNING: unexpected format: %s" % text.splitlines()[0][:80])
+    # Reject malformed entries instead of appending them: now.md feeds two
+    # more model stages, so a bad header corrupts the whole chain. The new
+    # position is not persisted on this path, so the lines are retried on the
+    # next save (the cooldown gates how often).
+    entry_lines = text.splitlines()
+    if not _HEADER_RE.match(entry_lines[0]):
+        env.log("validate", "ERROR: malformed entry rejected: %s" % entry_lines[0][:80])
+        return 1
+    if len(entry_lines) != 2:
+        env.log("validate", "WARNING: entry has %d lines, expected 2" % len(entry_lines))
 
     # --- Append to now.md ---
     with open(env.now_file, "a", encoding="utf-8") as f:

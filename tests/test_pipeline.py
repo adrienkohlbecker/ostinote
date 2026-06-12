@@ -160,3 +160,37 @@ def test_run_consolidation_writes_sections_and_marks_staging_done(tmp_path, monk
     assert "- stable fact" in (tmp_path / "data" / "core-memories.md").read_text(encoding="utf-8")
     assert not staging.exists()
     assert (tmp_path / "data" / "today-2000-01-01.done.md").exists()
+
+
+def test_run_save_rejects_malformed_header(tmp_path, monkeypatch):
+    """Refuse to append a summary whose first line is not a journal header.
+
+    Expected: `run_save` returns 1, nothing is written to `now.md`, and the
+    session line marker is not persisted, so the same transcript lines are
+    retried on the next save instead of being lost.
+    """
+    from ostinote import pipeline as pipeline_mod
+
+    env = project_env(tmp_path, monkeypatch)
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(
+        codex_item(
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Do a thing"}],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        pipeline_mod.summarize,
+        "call_model",
+        lambda _prompt, _cfg: model_result("I could not find a header for this session."),
+    )
+
+    assert pipeline_mod.run_save(env, "codex", "s1", str(transcript)) == 1
+
+    assert not (tmp_path / "data" / "now.md").exists()
+    assert SessionState.load(env.sessions_dir, "codex", "s1").line == 0
