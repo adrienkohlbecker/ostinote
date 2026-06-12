@@ -298,11 +298,18 @@ def post_tool(agent_name: str) -> None:
 
 
 def _count_lines(path: str) -> int:
+    """Count transcript lines, returning 0 on any I/O error.
+
+    Text mode with ``errors="replace"`` mirrors how ``Agent.parse()``
+    enumerates lines, so saved line markers and these delta checks always
+    agree. The never-raise contract matters: hooks call this on transcripts
+    that may vanish at any moment.
+    """
     count = 0
     try:
-        with open(path, "rb") as f:
+        with open(path, encoding="utf-8", errors="replace") as f:
             for _ in f:
                 count += 1
     except OSError:
-        pass
+        return 0
     return count
