@@ -342,7 +342,7 @@ def test_cli_dispatches_save_and_consolidate(tmp_path, monkeypatch):
     """Check argparse wiring for the `save` and `consolidate` commands.
 
     Expected: CLI arguments are passed to the correct pipeline functions, and
-    `main()` exits with the pipeline return codes instead of swallowing them.
+    `main()` returns the pipeline exit codes instead of swallowing them.
     """
     from ostinote import cli as cli_mod
 
@@ -354,25 +354,22 @@ def test_cli_dispatches_save_and_consolidate(tmp_path, monkeypatch):
             calls.append(("save", env.cwd, agent, session, transcript, force, dry, final)) or 7
         ),
     )
-    with pytest.raises(SystemExit) as save_exit:
-        # `main()` exits instead of returning for these commands, so the test
-        # asserts through pytest's SystemExit capture.
-        cli_mod.main(
-            [
-                "save",
-                "--agent",
-                "codex",
-                "--session",
-                "s1",
-                "--transcript",
-                "t.jsonl",
-                "--cwd",
-                str(tmp_path),
-                "--force",
-                "--dry",
-            ]
-        )
-    assert save_exit.value.code == 7
+    code = cli_mod.main(
+        [
+            "save",
+            "--agent",
+            "codex",
+            "--session",
+            "s1",
+            "--transcript",
+            "t.jsonl",
+            "--cwd",
+            str(tmp_path),
+            "--force",
+            "--dry",
+        ]
+    )
+    assert code == 7
     assert calls == [("save", str(tmp_path), "codex", "s1", "t.jsonl", True, True, False)]
 
     monkeypatch.setattr(
@@ -380,32 +377,26 @@ def test_cli_dispatches_save_and_consolidate(tmp_path, monkeypatch):
         "run_consolidation",
         lambda env: calls.append(("consolidate", env.cwd)) or 3,
     )
-    with pytest.raises(SystemExit) as consolidate_exit:
-        cli_mod.main(["consolidate", "--cwd", str(tmp_path)])
-    assert consolidate_exit.value.code == 3
+    assert cli_mod.main(["consolidate", "--cwd", str(tmp_path)]) == 3
     assert calls[-1] == ("consolidate", str(tmp_path))
 
 
 def test_cli_hook_failures_are_logged_and_swallowed(tmp_path, monkeypatch):
     """Make hook entrypoints fail closed from the agent's point of view.
 
-    Expected: if a hook handler raises, `_run_hook` logs the traceback to the
-    hook error file and still exits 0 so the agent session is not broken.
+    Expected: if a hook handler raises, `main()` logs the traceback to the
+    hook error file and still returns 0 so the agent session is not broken.
     """
-    from argparse import Namespace
-
     from ostinote import cli as cli_mod
 
     errors = tmp_path / "hook-errors.log"
     monkeypatch.setattr(cli_mod.env_mod, "HOOK_ERRORS_PATH", str(errors))
     # A generator throw is a compact way to make the fake handler raise exactly
-    # when `_run_hook` calls it.
+    # when the hook dispatcher calls it.
     monkeypatch.setattr(cli_mod.hooks_mod, "post_tool", lambda _agent: (_ for _ in ()).throw(RuntimeError("boom")))
 
-    with pytest.raises(SystemExit) as exc:
-        cli_mod._run_hook(Namespace(event="post-tool", agent="codex"))
+    assert cli_mod.main(["hook", "post-tool", "--agent", "codex"]) == 0
 
-    assert exc.value.code == 0
     assert "RuntimeError: boom" in errors.read_text(encoding="utf-8")
 
 

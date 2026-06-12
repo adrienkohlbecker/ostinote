@@ -14,6 +14,12 @@ Subcommands:
         Check every link of the (silent-by-design) pipeline, loudly.
     install|uninstall claude|codex|all [--user|--project]
         (Un)register hooks and the /ostinote command.
+
+Every command handler returns an int exit code and ``main`` returns it, so
+the console-script wrapper and ``python -m ostinote`` hand it to ``sys.exit``.
+The one exception is ``hook``, which always exits 0: agents treat nonzero
+hook exits as errors (Claude Code blocks on exit code 2), so hook failures
+are logged to ``HOOK_ERRORS_PATH`` instead of surfacing.
 """
 
 from __future__ import annotations
@@ -25,6 +31,7 @@ import time
 import traceback
 
 from . import costs as costs_mod
+from . import doctor as doctor_mod
 from . import env as env_mod
 from . import hooks as hooks_mod
 from . import install as install_mod
@@ -33,22 +40,42 @@ from .agents import agent_names
 from .env import Env
 
 
-def main(argv=None) -> None:
+def main(argv: list[str] | None = None) -> int:
+    """Parse arguments and dispatch to the matching command handler.
+
+    Returns the command's exit code rather than calling ``sys.exit`` itself,
+    so tests can invoke it directly.
+    """
+    args = _build_parser().parse_args(argv)
+    return args.func(args)
+
+
+def _add_cwd(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--cwd", default=None, help="project directory (default: the current directory)")
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    """Build the argparse tree; each subparser binds its handler via ``func``."""
+    # suggest_on_error / color shipped in Python 3.14; older interpreters
+    # (requires-python is 3.11) get the plain parser.
+    extra: dict[str, bool] = {"suggest_on_error": True, "color": True} if sys.version_info >= (3, 14) else {}
     parser = argparse.ArgumentParser(
         prog="ostinote",
         description="Continuous memory for coding agents (Claude Code, Codex).",
+        **extra,
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_hook = sub.add_parser("hook", help="lifecycle hook entry points")
     p_hook.add_argument("event", choices=["session-start", "post-tool", "session-end"])
     p_hook.add_argument("--agent", required=True, choices=agent_names())
+    p_hook.set_defaults(func=_cmd_hook)
 
     p_save = sub.add_parser("save", help="save a session into memory")
     p_save.add_argument("--agent", default="claude", choices=agent_names())
     p_save.add_argument("--session", default=None)
     p_save.add_argument("--transcript", default=None)
-    p_save.add_argument("--cwd", default=None)
+    _add_cwd(p_save)
     p_save.add_argument("--force", action="store_true", help="bypass cooldown and min-message threshold")
     p_save.add_argument(
         "--final",
@@ -56,17 +83,21 @@ def main(argv=None) -> None:
         help="end-of-session save: bypass cooldown, keep min-message threshold",
     )
     p_save.add_argument("--dry", action="store_true", help="print the extract, skip the model call")
+    p_save.set_defaults(func=_cmd_save)
 
     p_cons = sub.add_parser("consolidate", help="compress past days into recent/archive")
-    p_cons.add_argument("--cwd", default=None)
+    _add_cwd(p_cons)
+    p_cons.set_defaults(func=_cmd_consolidate)
 
     p_status = sub.add_parser("status", help="show memory state")
-    p_status.add_argument("--cwd", default=None)
+    _add_cwd(p_status)
     p_status.add_argument("--costs", action="store_true", help="show per-day token usage and cost instead")
+    p_status.set_defaults(func=_cmd_status)
 
     p_doctor = sub.add_parser("doctor", help="check the whole pipeline, loudly")
-    p_doctor.add_argument("--cwd", default=None)
+    _add_cwd(p_doctor)
     p_doctor.add_argument("--live", action="store_true", help="also run one real (paid) summarizer call")
+    p_doctor.set_defaults(func=_cmd_doctor)
 
     for name in ("install", "uninstall"):
         p = sub.add_parser(name, help="%s hooks for an agent" % name)
@@ -86,45 +117,18 @@ def main(argv=None) -> None:
             const="project",
             help="register for this project only",
         )
-        p.set_defaults(scope="user")
-        p.add_argument("--cwd", default=None)
+        p.set_defaults(scope="user", func=_cmd_install)
+        _add_cwd(p)
 
-    args = parser.parse_args(argv)
-
-    if args.command == "hook":
-        _run_hook(args)
-    elif args.command == "save":
-        env = Env(args.cwd or os.getcwd())
-        sys.exit(
-            pipeline.run_save(
-                env,
-                args.agent,
-                args.session,
-                args.transcript,
-                args.force,
-                args.dry,
-                args.final,
-            )
-        )
-    elif args.command == "consolidate":
-        env = Env(args.cwd or os.getcwd())
-        sys.exit(pipeline.run_consolidation(env))
-    elif args.command == "status":
-        env = Env(args.cwd or os.getcwd())
-        _costs(env) if args.costs else _status(env)
-    elif args.command == "doctor":
-        from . import doctor as doctor_mod
-
-        sys.exit(doctor_mod.run(Env(args.cwd or os.getcwd()), live=args.live))
-    elif args.command in ("install", "uninstall"):
-        root = os.path.abspath(args.cwd or os.getcwd())
-        targets = agent_names() if args.agent == "all" else [args.agent]
-        for agent in targets:
-            for line in install_mod.install(agent, args.scope, root, remove=args.command == "uninstall"):
-                print(line)
+    return parser
 
 
-def _run_hook(args) -> None:
+def _env(args) -> Env:
+    """Build the Env for the command's --cwd, defaulting to the process cwd."""
+    return Env(args.cwd or os.getcwd())
+
+
+def _cmd_hook(args) -> int:
     """Run a hook handler; never propagate failures into the agent."""
     handlers = {
         "session-start": hooks_mod.session_start,
@@ -148,7 +152,34 @@ def _run_hook(args) -> None:
                 )
         except OSError:
             pass
-    sys.exit(0)
+    return 0
+
+
+def _cmd_save(args) -> int:
+    return pipeline.run_save(_env(args), args.agent, args.session, args.transcript, args.force, args.dry, args.final)
+
+
+def _cmd_consolidate(args) -> int:
+    return pipeline.run_consolidation(_env(args))
+
+
+def _cmd_status(args) -> int:
+    env = _env(args)
+    _costs(env) if args.costs else _status(env)
+    return 0
+
+
+def _cmd_doctor(args) -> int:
+    return doctor_mod.run(_env(args), live=args.live)
+
+
+def _cmd_install(args) -> int:
+    root = os.path.abspath(args.cwd or os.getcwd())
+    targets = agent_names() if args.agent == "all" else [args.agent]
+    for agent in targets:
+        for line in install_mod.install(agent, args.scope, root, remove=args.command == "uninstall"):
+            print(line)
+    return 0
 
 
 def _status(env: Env) -> None:
@@ -189,6 +220,9 @@ def _status(env: Env) -> None:
 
 
 def _costs(env: Env) -> None:
+    def usd(cost: float) -> str:
+        return "$%.4f" % cost if cost else "-"
+
     days = costs_mod.day_totals(env.logs_dir)
     if not days:
         print("no model calls logged in %s" % env.logs_dir)
@@ -199,7 +233,7 @@ def _costs(env: Env) -> None:
     for day, t in days:
         for key in total:
             total[key] += t[key]
-        print("%-12s %6d %12d %12d %10d %10s" % (day, t["calls"], t["input"], t["cache"], t["output"], _usd(t["cost"])))
+        print("%-12s %6d %12d %12d %10d %10s" % (day, t["calls"], t["input"], t["cache"], t["output"], usd(t["cost"])))
     print(
         "%-12s %6d %12d %12d %10d %10s"
         % (
@@ -208,15 +242,11 @@ def _costs(env: Env) -> None:
             total["input"],
             total["cache"],
             total["output"],
-            _usd(total["cost"]),
+            usd(total["cost"]),
         )
     )
     print("\n(cost is summed only from calls whose engine reported it)")
 
 
-def _usd(cost: float) -> str:
-    return "$%.4f" % cost if cost else "-"
-
-
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
