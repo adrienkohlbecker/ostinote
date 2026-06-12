@@ -29,9 +29,11 @@ Changelog = "https://github.com/adrienkohlbecker/ostinote/releases"
 [project.scripts]
 ostinote = "ostinote.cli:main"
 
-# PEP 735 dependency group: repo-local dev tooling, not published as an extra
+# PEP 735 dependency groups: repo-local tooling, not published as extras.
+# Exact versions are pinned by uv.lock; run via `uv run --locked`.
 [dependency-groups]
 dev = ["pytest", "pytest-timeout", "ruff"]
+release = ["twine"]
 
 [build-system]
 # >=77 needed for PEP 639 SPDX license expression / license-files
