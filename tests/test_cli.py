@@ -1,4 +1,5 @@
 import os
+import subprocess
 
 import pytest
 
@@ -129,3 +130,16 @@ def test_cli_install_propagates_failure_exit_code(tmp_path, capsys, installer_en
 
     assert cli_mod.main(["install", "codex", "--project", "--cwd", str(tmp_path)]) == 1
     assert "ERROR" in capsys.readouterr().out
+
+
+def test_cli_project_install_uses_git_worktree_root(tmp_path, installer_env):
+    """Project install from a subdirectory should write config at repo root."""
+    repo = tmp_path / "repo"
+    subdir = repo / "src" / "pkg"
+    subdir.mkdir(parents=True)
+    subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True, timeout=30)
+
+    assert cli_mod.main(["install", "codex", "--project", "--cwd", str(subdir)]) == 0
+
+    assert (repo / ".codex" / "hooks.json").exists()
+    assert not (subdir / ".codex" / "hooks.json").exists()

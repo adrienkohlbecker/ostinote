@@ -18,6 +18,7 @@ from __future__ import annotations
 import contextlib
 import os
 import re
+import stat
 import subprocess
 import time
 
@@ -44,7 +45,7 @@ def _git_main_root(cwd: str) -> str:
     """
     try:
         out = subprocess.run(
-            ["git", "-C", cwd, "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            ["git", "--no-optional-locks", "-C", cwd, "rev-parse", "--path-format=absolute", "--git-common-dir"],
             capture_output=True,
             text=True,
             timeout=10,
@@ -61,6 +62,27 @@ def _git_main_root(cwd: str) -> str:
     return cwd
 
 
+def worktree_root_for(cwd: str) -> str:
+    """Return the current git worktree top-level for ``cwd``.
+
+    Falls back to the absolute cwd outside git or when git is unavailable. This
+    is the root where project-scoped agent config should be installed.
+    """
+    cwd = os.path.abspath(cwd)
+    try:
+        out = subprocess.run(
+            ["git", "--no-optional-locks", "-C", cwd, "rev-parse", "--path-format=absolute", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if out.returncode == 0 and out.stdout.strip():
+            return os.path.normpath(out.stdout.strip())
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return cwd
+
+
 def _resolve_root_config(cwd: str) -> tuple[str, dict, set]:
     """Resolve (project_root, cfg, guarded) for a session cwd.
 
@@ -71,16 +93,13 @@ def _resolve_root_config(cwd: str) -> tuple[str, dict, set]:
     validation (see ``config.load_trusted``).
     """
     cwd = os.path.abspath(cwd)
-    root = _git_main_root(cwd)
-    cfg, guarded = config_mod.load_trusted(root)
-    if not cfg["share_worktrees"]:
-        # Opted out of shared memory: re-resolve against this worktree's own
-        # checkout, which may carry a different project config (including this
-        # flag itself). Reloading is required, not redundant — the project
-        # layer can differ between the two roots; the user layer cannot.
-        root = cwd
-        cfg, guarded = config_mod.load_trusted(root)
-    return root, cfg, guarded
+    worktree_root = worktree_root_for(cwd)
+    main_root = _git_main_root(cwd)
+    main_cfg, main_guarded = config_mod.load_trusted(main_root)
+    worktree_cfg, worktree_guarded = config_mod.load_trusted(worktree_root)
+    if not worktree_cfg["share_worktrees"] or not main_cfg["share_worktrees"]:
+        return worktree_root, worktree_cfg, worktree_guarded
+    return main_root, main_cfg, main_guarded
 
 
 def _resolve_data_dir(cfg: dict, project_root: str) -> str:
@@ -121,12 +140,13 @@ def safe_data_dir(cfg: dict, project_root: str, guarded: set) -> str:
     """
     resolved = _resolve_data_dir(cfg, project_root)
     if ("data_dir",) in guarded:
+        default_dir = _resolve_data_dir(config_mod.DEFAULTS, project_root)
         safe_roots = (
             os.path.realpath(project_root),
-            os.path.realpath(os.path.expanduser("~/.ostinote")),
+            default_dir,
         )
         if not any(_within(root, resolved) for root in safe_roots):
-            return _resolve_data_dir(config_mod.DEFAULTS, project_root)
+            return default_dir
     return resolved
 
 
@@ -139,6 +159,75 @@ def data_dir_for(cwd: str) -> str:
     """
     root, cfg, guarded = _resolve_root_config(cwd)
     return safe_data_dir(cfg, root, guarded)
+
+
+def _logical_child(parent: str, child: str) -> bool:
+    """Return whether ``child`` is lexically nested under ``parent``."""
+    try:
+        return os.path.commonpath([os.path.abspath(parent), os.path.abspath(child)]) == os.path.abspath(parent)
+    except ValueError:
+        return False
+
+
+def ensure_child_dir(root: str, path: str) -> None:
+    """Create ``path`` under ``root`` without traversing existing symlinks.
+
+    Project-owned memory dirs may live inside a cloned repository, so existing
+    path components are treated as untrusted. A symlinked state/log directory
+    is refused instead of followed.
+    """
+    root_abs = os.path.abspath(root)
+    path_abs = os.path.abspath(path)
+    if not _logical_child(root_abs, path_abs):
+        raise OSError("path escapes root: %s" % path)
+    rel = os.path.relpath(path_abs, root_abs)
+    current = root_abs
+    if rel != ".":
+        for part in rel.split(os.sep):
+            current = os.path.join(current, part)
+            if os.path.lexists(current):
+                if os.path.islink(current):
+                    raise OSError("refusing symlinked directory: %s" % current)
+                if not os.path.isdir(current):
+                    raise OSError("refusing non-directory path component: %s" % current)
+                if not _within(os.path.realpath(root_abs), os.path.realpath(current)):
+                    raise OSError("directory escapes root: %s" % current)
+    os.makedirs(path_abs, exist_ok=True)
+
+
+def validate_child_file(root: str, path: str) -> None:
+    """Ensure ``path`` can be written as a regular child of ``root``."""
+    ensure_child_dir(root, os.path.dirname(path))
+    if os.path.lexists(path):
+        if os.path.islink(path):
+            raise OSError("refusing symlinked file: %s" % path)
+        if not os.path.isfile(path):
+            raise OSError("refusing non-regular file: %s" % path)
+        if not _within(os.path.realpath(root), os.path.realpath(path)):
+            raise OSError("file escapes root: %s" % path)
+
+
+def open_regular_child(path: str, root: str, flags: int, mode: int = 0o600) -> int:
+    """Open a regular file under ``root`` without following final symlinks."""
+    if flags & os.O_CREAT:
+        ensure_child_dir(root, os.path.dirname(path))
+    real_root = os.path.realpath(root)
+    real_path = os.path.realpath(path)
+    if not _within(real_root, real_path):
+        raise OSError("path escapes root: %s" % path)
+    if os.path.islink(path):
+        raise OSError("refusing symlink: %s" % path)
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(path, flags, mode)
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise OSError("refusing non-regular file: %s" % path)
+    except Exception:
+        os.close(fd)
+        raise
+    return fd
 
 
 class Env:
@@ -215,12 +304,13 @@ class Env:
         Idempotent; the .gitignore keeps an in-repo data dir (``data_dir:
         ".ostinote"``) out of version control. Failure to write it is ignored.
         """
-        for d in (self.sessions_dir, self.logs_dir):
-            os.makedirs(d, exist_ok=True)
+        for d in (self.state_dir, self.sessions_dir, self.logs_dir):
+            ensure_child_dir(self.data_dir, d)
         gitignore = os.path.join(self.data_dir, ".gitignore")
         if not os.path.exists(gitignore):
             with contextlib.suppress(OSError):
-                with open(gitignore, "w", encoding="utf-8") as f:
+                fd = open_regular_child(gitignore, self.data_dir, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
                     f.write("*\n")
 
     # --- time ----------------------------------------------------------------
@@ -241,12 +331,15 @@ class Env:
         Creates the data directories on first use; write errors are swallowed
         so logging can never break a hook.
         """
-        self.ensure_dirs()
-        ts = tzutil.now(self.tz).strftime("%H:%M:%S")
-        line = "%s [%s] %s\n" % (ts, component, message)
-        path = os.path.join(self.logs_dir, "memory-%s.log" % self.today())
         with contextlib.suppress(OSError):
-            with open(path, "a", encoding="utf-8") as f:
+            self.ensure_dirs()
+            ts = tzutil.now(self.tz).strftime("%H:%M:%S")
+            line = "%s [%s] %s\n" % (ts, component, message)
+            path = os.path.join(self.logs_dir, "memory-%s.log" % self.today())
+            fd = open_regular_child(path, self.data_dir, os.O_WRONLY | os.O_CREAT | os.O_APPEND)
+            if hasattr(os, "fchmod"):
+                os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "a", encoding="utf-8") as f:
                 f.write(line)
 
     def log_tokens(self, component: str, tk_in: int, tk_out: int, tk_cache: int, cost: float) -> None:
@@ -259,19 +352,27 @@ class Env:
     def rotate_logs(self) -> None:
         """Delete daily logs older than 30 days; cap background.log size."""
         try:
+            self.ensure_dirs()
             cutoff = time.time() - 30 * 86400
             removed = 0
             for name in sorted(os.listdir(self.logs_dir)):
                 path = os.path.join(self.logs_dir, name)
+                if os.path.islink(path):
+                    continue
                 if name.startswith("memory-") and name.endswith(".log") and os.path.getmtime(path) < cutoff:
                     os.remove(path)
                     removed += 1
             if removed:
                 self.log("rotate", "deleted %d logs older than 30 days" % removed)
             background = os.path.join(self.logs_dir, "background.log")
-            if os.path.exists(background) and os.path.getsize(background) > 512 * 1024:
-                with open(background, "w", encoding="utf-8"):
-                    pass
+            oversized_background = (
+                os.path.exists(background)
+                and not os.path.islink(background)
+                and os.path.getsize(background) > 512 * 1024
+            )
+            if oversized_background:
+                fd = open_regular_child(background, self.data_dir, os.O_WRONLY | os.O_TRUNC)
+                os.close(fd)
         except OSError:
             return
 
@@ -285,7 +386,7 @@ class Env:
         """
         try:
             out = subprocess.run(
-                ["git", "-C", self.cwd, "branch", "--show-current"],
+                ["git", "--no-optional-locks", "-C", self.cwd, "symbolic-ref", "-q", "--short", "HEAD"],
                 capture_output=True,
                 text=True,
                 timeout=10,

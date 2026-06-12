@@ -138,12 +138,12 @@ def test_config_project_overrides(tmp_path, monkeypatch):
     project config omits them, and nested defaults survive partial overrides.
     """
     monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", str(tmp_path / "user.json"))
-    (tmp_path / "user.json").write_text(json.dumps({"cooldowns": {"save_seconds": 60}, "timezone": "UTC"}))
-    proj = _project(tmp_path, {"cooldowns": {"save_seconds": 30}})
+    (tmp_path / "user.json").write_text(json.dumps({"cooldowns": {"compress_seconds": 7200}, "timezone": "UTC"}))
+    proj = _project(tmp_path, {"cooldowns": {"compress_seconds": 9000}, "timezone": "Europe/Paris"})
     cfg = config_mod.load(str(proj))
-    assert cfg["cooldowns"]["save_seconds"] == 30
-    assert cfg["cooldowns"]["compress_seconds"] == 3600  # default survives
-    assert cfg["timezone"] == "UTC"  # user layer survives
+    assert cfg["cooldowns"]["compress_seconds"] == 9000
+    assert cfg["cooldowns"]["save_seconds"] == 120  # default survives
+    assert cfg["timezone"] == "Europe/Paris"  # project layer overrides user
 
 
 def test_data_dir_slug_placeholder(tmp_path, monkeypatch):
@@ -222,6 +222,44 @@ def test_project_config_cannot_set_summarizer_command(tmp_path, monkeypatch):
     assert ("data_dir",) not in guarded
 
 
+def test_config_invalid_shapes_and_project_cost_controls_fall_back(tmp_path, monkeypatch):
+    """Ignore config values that would crash hooks or amplify model calls.
+
+    Expected: wrong-typed values fall back to defaults, and an untrusted project
+    cannot lower cooldowns/thresholds or raise summarizer timeout beyond the
+    safe defaults.
+    """
+    monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", str(tmp_path / "user.json"))
+    proj = _project(
+        tmp_path,
+        {
+            "data_dir": 123,
+            "features": False,
+            "cooldowns": {"save_seconds": 0, "compress_seconds": 0},
+            "thresholds": {"min_human_messages": 0, "delta_lines_trigger": 0},
+            "summarizer": {"timeout": 9999},
+            "time_format": "metric",
+        },
+    )
+
+    report = config_mod.load_report(str(proj))
+
+    assert report.config["data_dir"] == config_mod.DEFAULTS["data_dir"]
+    assert report.config["features"] == config_mod.DEFAULTS["features"]
+    assert report.config["cooldowns"] == config_mod.DEFAULTS["cooldowns"]
+    assert report.config["thresholds"] == config_mod.DEFAULTS["thresholds"]
+    assert report.config["summarizer"]["timeout"] == config_mod.DEFAULTS["summarizer"]["timeout"]
+    assert report.config["time_format"] == config_mod.DEFAULTS["time_format"]
+    assert {issue.key for issue in report.issues} >= {
+        "data_dir",
+        "features",
+        "cooldowns.save_seconds",
+        "thresholds.min_human_messages",
+        "summarizer.timeout",
+        "time_format",
+    }
+
+
 def test_project_config_data_dir_is_flagged_guarded(tmp_path, monkeypatch):
     """Report when the project layer sets the guarded `data_dir` key.
 
@@ -252,6 +290,26 @@ def test_env_rejects_project_data_dir_escaping_repo(tmp_path, monkeypatch):
     expected = os.path.realpath(os.path.expanduser("~/.ostinote/projects/%s" % _slugify(str(proj))))
     assert env.data_dir == expected
     assert str(escape) not in env.data_dir
+
+
+def test_env_rejects_project_data_dir_pointing_at_other_memory_slug(tmp_path, monkeypatch):
+    """Refuse a project data_dir under another ~/.ostinote project slug.
+
+    Expected: cloned repos may use their own default external memory directory,
+    but cannot point at a sibling project's memory inside the same ostinote
+    home, because that would leak and contaminate cross-project memory.
+    """
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", str(tmp_path / "no-user.json"))
+    victim = home / ".ostinote" / "projects" / "victim"
+    proj = _project(tmp_path, {"data_dir": str(victim), "share_worktrees": False})
+
+    env = Env(str(proj))
+
+    expected = os.path.realpath(os.path.expanduser("~/.ostinote/projects/%s" % _slugify(str(proj))))
+    assert env.data_dir == expected
+    assert env.data_dir != os.path.realpath(str(victim))
 
 
 @pytest.mark.skipif(os.name == "nt", reason="symlink creation may require privileges on Windows")
@@ -287,6 +345,36 @@ def test_env_allows_project_data_dir_inside_repo(tmp_path, monkeypatch):
 
     env = Env(str(proj))
     assert env.data_dir == os.path.realpath(str(proj / ".ostinote"))
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlink behavior differs on Windows")
+def test_env_logging_refuses_symlinked_log_file(tmp_path, monkeypatch):
+    """Do not append hook logs through symlinks in an in-repo data dir."""
+    monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", str(tmp_path / "no-user.json"))
+    proj = _project(tmp_path, {"data_dir": ".ostinote", "share_worktrees": False})
+    logs = proj / ".ostinote" / "logs"
+    logs.mkdir()
+    target = tmp_path / "target.log"
+    target.write_text("secret", encoding="utf-8")
+    today = Env(str(proj)).today()
+    os.symlink(target, logs / ("memory-%s.log" % today))
+
+    Env(str(proj)).log("test", "hello")
+
+    assert target.read_text(encoding="utf-8") == "secret"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlink behavior differs on Windows")
+def test_env_refuses_symlinked_state_or_logs_dirs(tmp_path, monkeypatch):
+    """Do not create sessions or logs under symlinked data-dir children."""
+    monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", str(tmp_path / "no-user.json"))
+    proj = _project(tmp_path, {"data_dir": ".ostinote", "share_worktrees": False})
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    os.symlink(outside, proj / ".ostinote" / "state")
+
+    with pytest.raises(OSError, match="symlinked directory"):
+        Env(str(proj)).ensure_dirs()
 
 
 def test_env_trusts_user_data_dir_anywhere(tmp_path, monkeypatch):
@@ -347,6 +435,23 @@ def test_env_shares_worktree_memory_with_main_checkout(tmp_path):
     assert env.data_dir == Env(str(main)).data_dir
 
 
+def test_env_started_from_subdir_uses_worktree_root(tmp_path):
+    """Do not derive a separate project identity from a subdirectory cwd."""
+    main = tmp_path / "main"
+    subdir = main / "src" / "pkg"
+    (main / ".ostinote").mkdir(parents=True)
+    (main / ".ostinote" / "config.json").write_text(json.dumps({"share_worktrees": True}), encoding="utf-8")
+    subdir.mkdir(parents=True)
+    _git(main, "init", "-q")
+    _git(main, "add", ".")
+    _git(main, "commit", "-q", "-m", "init")
+
+    env = Env(str(subdir))
+
+    assert env.project_root == str(main)
+    assert env.data_dir == Env(str(main)).data_dir
+
+
 def test_env_worktree_opt_out_uses_own_root(tmp_path):
     """Honor `share_worktrees: false` by re-resolving against the worktree.
 
@@ -365,4 +470,22 @@ def test_env_worktree_opt_out_uses_own_root(tmp_path):
     env = Env(str(tmp_path / "wt"))
 
     assert env.project_root == str(tmp_path / "wt")
+    assert env.data_dir != Env(str(main)).data_dir
+
+
+def test_env_worktree_local_config_can_opt_out(tmp_path):
+    """Let a linked worktree's own config opt out of shared memory."""
+    main = tmp_path / "main"
+    worktree = tmp_path / "wt"
+    (main / ".ostinote").mkdir(parents=True)
+    (main / ".ostinote" / "config.json").write_text(json.dumps({"share_worktrees": True}), encoding="utf-8")
+    _git(main, "init", "-q")
+    _git(main, "add", ".")
+    _git(main, "commit", "-q", "-m", "init")
+    _git(main, "worktree", "add", "-q", str(worktree))
+    (worktree / ".ostinote" / "config.json").write_text(json.dumps({"share_worktrees": False}), encoding="utf-8")
+
+    env = Env(str(worktree))
+
+    assert env.project_root == str(worktree)
     assert env.data_dir != Env(str(main)).data_dir

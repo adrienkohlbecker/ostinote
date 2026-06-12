@@ -15,13 +15,12 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import stat
 import subprocess
 import sys
 import time
 
 from .agents import get_agent
-from .env import Env
+from .env import Env, open_regular_child
 from .pipeline import staging_files
 from .state import SessionState, all_states
 
@@ -75,43 +74,13 @@ def self_command() -> list[str]:
     return [sys.executable, "-P", "-m", "ostinote"]
 
 
-def _open_regular_child(path: str, root: str, flags: int, mode: int = 0o600) -> int:
-    """Open a regular file under ``root`` without following final symlinks.
-
-    Project-owned in-repo data dirs are intentionally supported, so hook reads
-    and background logs must treat data-dir contents as attacker-controlled
-    paths until both containment and file type are verified.
-    """
-    real_root = os.path.realpath(root)
-    real_path = os.path.realpath(path)
-    try:
-        inside = os.path.commonpath([real_root, real_path]) == real_root
-    except ValueError:
-        inside = False
-    if not inside:
-        raise OSError("path escapes data dir: %s" % path)
-    if os.path.islink(path):
-        raise OSError("refusing symlink: %s" % path)
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    fd = os.open(path, flags, mode)
-    try:
-        st = os.fstat(fd)
-        if not stat.S_ISREG(st.st_mode):
-            raise OSError("refusing non-regular file: %s" % path)
-    except Exception:
-        os.close(fd)
-        raise
-    return fd
-
-
 def _open_background_log(env: Env):
     """Open background.log append-only, private, and without symlink traversal."""
     env.ensure_dirs()
     if os.path.islink(env.logs_dir):
         raise OSError("refusing symlinked logs dir: %s" % env.logs_dir)
     log_path = os.path.join(env.logs_dir, "background.log")
-    fd = _open_regular_child(log_path, env.data_dir, os.O_WRONLY | os.O_CREAT | os.O_APPEND)
+    fd = open_regular_child(log_path, env.data_dir, os.O_WRONLY | os.O_CREAT | os.O_APPEND)
     if hasattr(os, "fchmod"):
         os.fchmod(fd, 0o600)
     return os.fdopen(fd, "ab")
@@ -216,7 +185,7 @@ def emit(agent_name: str, event_name: str, text: str) -> None:
 def _read_injected_file(env: Env, path: str) -> str:
     """Read the tail of one memory file safely for SessionStart injection."""
     try:
-        fd = _open_regular_child(path, env.data_dir, os.O_RDONLY)
+        fd = open_regular_child(path, env.data_dir, os.O_RDONLY)
     except OSError:
         return ""
     with os.fdopen(fd, "rb") as f:

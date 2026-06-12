@@ -77,15 +77,29 @@ def _format_command(argv: list[str]) -> str:
     return shlex.join(argv)
 
 
+def _command_argv(subcommand: str, agent: str) -> list[str]:
+    """Return argv for one managed hook invocation."""
+    return self_command() + ["hook", subcommand, "--agent", agent]
+
+
 def _command_str(subcommand: str, agent: str) -> str:
-    return _format_command(self_command() + ["hook", subcommand, "--agent", agent])
+    return _format_command(_command_argv(subcommand, agent))
 
 
-def _is_ours(command: str) -> bool:
-    try:
-        parts = shlex.split(command, posix=os.name != "nt")
-    except ValueError:
-        return False
+def _hook_entry(event: str, subcommand: str, agent: str) -> dict:
+    """Return the hook handler object for the target agent's config schema."""
+    argv = _command_argv(subcommand, agent)
+    if agent == "claude":
+        entry = {"type": "command", "command": argv[0], "args": argv[1:]}
+        if event != "SessionStart":
+            entry["async"] = True
+            entry["timeout"] = 120
+        return entry
+    return {"type": "command", "command": _format_command(argv)}
+
+
+def _parts_agent(parts: list[str]) -> str:
+    """Return the managed hook agent from an argv list, or ""."""
     for idx, part in enumerate(parts):
         if part != "hook":
             continue
@@ -97,8 +111,28 @@ def _is_ours(command: str) -> bool:
             and suffix[3] in _SKILLS
             and _is_ostinote_invocation(parts[:idx])
         ):
-            return True
-    return False
+            return suffix[3]
+    return ""
+
+
+def _is_ours(command: str, agent: str | None = None) -> bool:
+    try:
+        parts = shlex.split(command, posix=os.name != "nt")
+    except ValueError:
+        return False
+    found = _parts_agent(parts)
+    return bool(found and (agent is None or found == agent))
+
+
+def _hook_agent(hook: dict) -> str:
+    """Return the managed agent for a hook object, or "" when it is not ours."""
+    command = hook.get("command")
+    if not isinstance(command, str):
+        return ""
+    args = hook.get("args")
+    if isinstance(args, list) and all(isinstance(arg, str) for arg in args):
+        return _parts_agent([command, *args])
+    return _parts_agent(shlex.split(command, posix=os.name != "nt")) if _is_ours(command) else ""
 
 
 def _is_ostinote_invocation(parts: list[str]) -> bool:
@@ -124,13 +158,11 @@ def _read_json(path: str) -> dict:
     return data
 
 
-def _write_json(path: str, data: dict) -> None:
-    text = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
-    _write_text_atomic(path, text)
-
-
-def _write_text_atomic(path: str, text: str) -> None:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+def _write_text_atomic(path: str, text: str, root: str | None = None) -> None:
+    if root:
+        env_mod.validate_child_file(root, path)
+    else:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=".ostinote-", suffix=".tmp", dir=os.path.dirname(path), text=True)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -140,6 +172,11 @@ def _write_text_atomic(path: str, text: str) -> None:
         with contextlib.suppress(OSError):
             os.unlink(tmp)
         raise
+
+
+def _write_json(path: str, data: dict, root: str | None = None) -> None:
+    text = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+    _write_text_atomic(path, text, root=root)
 
 
 def _update_hooks(settings: dict, agent: str, remove_only: bool = False) -> dict:
@@ -152,7 +189,7 @@ def _update_hooks(settings: dict, agent: str, remove_only: bool = False) -> dict
     for event, subcommand in _events_for(agent).items():
         kept_groups = _strip_managed_hooks(hooks.get(event, []))
         if not remove_only:
-            kept_groups.append({"hooks": [{"type": "command", "command": _command_str(subcommand, agent)}]})
+            kept_groups.append({"hooks": [_hook_entry(event, subcommand, agent)]})
         if kept_groups:
             hooks[event] = kept_groups
         else:
@@ -176,8 +213,7 @@ def _strip_managed_hooks(groups) -> list:
             continue
         inner = []
         for hook in group_hooks:
-            command = hook.get("command") if isinstance(hook, dict) else None
-            if isinstance(command, str) and _is_ours(command):
+            if isinstance(hook, dict) and _hook_agent(hook):
                 continue
             inner.append(hook)
         if inner:
@@ -187,13 +223,14 @@ def _strip_managed_hooks(groups) -> list:
     return kept_groups
 
 
-def registered_events(settings: dict) -> set:
+def registered_events(settings: dict, agent: str | None = None) -> set:
     """Return the event names in a hooks settings dict that carry an ostinote-managed hook.
 
     Tolerates malformed hook structures (a non-dict ``hooks`` value, list-typed
     groups, non-list hook arrays) by skipping them rather than raising, so
     ``doctor`` can report on a hand-broken config file instead of crashing on
-    it. Shared with the installer's own recognition logic via ``_is_ours``.
+    it. When ``agent`` is supplied, only hooks with the matching ``--agent``
+    argument count as registered.
     """
     events: set = set()
     hooks = settings.get("hooks")
@@ -209,8 +246,8 @@ def registered_events(settings: dict) -> set:
             if not isinstance(group_hooks, list):
                 continue
             for hook in group_hooks:
-                command = hook.get("command") if isinstance(hook, dict) else None
-                if isinstance(command, str) and _is_ours(command):
+                found_agent = _hook_agent(hook) if isinstance(hook, dict) else ""
+                if found_agent and (agent is None or found_agent == agent):
                     events.add(event)
     return events
 
@@ -223,6 +260,33 @@ def _hooks_file_for(agent: str, scope: str, project_root: str) -> str:
     return os.path.join(base, "hooks.json")
 
 
+def hook_files_for(agent: str, scope: str, project_root: str) -> list[str]:
+    """Return hook config files to inspect for an agent/scope."""
+    if agent == "claude" and scope == "project":
+        return [
+            os.path.join(project_root, ".claude", "settings.json"),
+            os.path.join(project_root, ".claude", "settings.local.json"),
+        ]
+    return [_hooks_file_for(agent, scope, project_root)]
+
+
+def _skill_path_for(agent: str, scope: str, project_root: str) -> str:
+    base, _invoke = _SKILLS[agent]
+    skill_dir = (
+        os.path.join(os.path.expanduser("~"), base, "skills", "ostinote")
+        if scope == "user"
+        else os.path.join(project_root, base, "skills", "ostinote")
+    )
+    return os.path.join(skill_dir, "SKILL.md")
+
+
+def codex_writable_root_for(project_root: str, scope: str) -> str:
+    """Return the Codex sandbox root expected for an install scope."""
+    if scope == "user":
+        return "~/.ostinote/projects"
+    return _home_relative(env_mod.data_dir_for(project_root))
+
+
 def install(agent: str, scope: str, project_root: str, remove: bool = False) -> tuple[int, list[str]]:
     """(Un)register hooks and the /ostinote command.
 
@@ -233,6 +297,21 @@ def install(agent: str, scope: str, project_root: str, remove: bool = False) -> 
     code = 0
     report = []
     path = _hooks_file_for(agent, scope, project_root)
+    _base, invoke = _SKILLS[agent]
+    target = _skill_path_for(agent, scope, project_root)
+    skill_dir = os.path.dirname(target)
+    if scope == "project" and not remove:
+        try:
+            env_mod.validate_child_file(project_root, path)
+            env_mod.validate_child_file(project_root, target)
+        except OSError as e:
+            return 1, ["ERROR: refusing unsafe project install path: %s" % e]
+    codex_writable_report = ""
+    if agent == "codex" and not remove:
+        try:
+            codex_writable_report = _ensure_codex_writable_root(project_root, scope)
+        except (OSError, _ConfigError) as e:
+            return 1, ["ERROR: could not update Codex writable roots: %s" % e]
     if not remove or os.path.exists(path):
         try:
             settings = _read_json(path)
@@ -240,42 +319,51 @@ def install(agent: str, scope: str, project_root: str, remove: bool = False) -> 
         except _ConfigError as e:
             report.append("ERROR: %s" % e)
             return 1, report
-        _write_json(path, settings)
+        try:
+            _write_json(path, settings, root=project_root if scope == "project" else None)
+        except OSError as e:
+            return 1, ["ERROR: could not write hooks config: %s" % e]
         report.append("%s hooks %s: %s" % (agent, "removed from" if remove else "registered in", path))
 
     # The ostinote core-memory command, as a skill (same file for both agents).
-    base, invoke = _SKILLS[agent]
-    skill_dir = (
-        os.path.join(os.path.expanduser("~"), base, "skills", "ostinote")
-        if scope == "user"
-        else os.path.join(project_root, base, "skills", "ostinote")
-    )
-    target = os.path.join(skill_dir, "SKILL.md")
     if remove:
         if os.path.exists(target):
-            shutil.rmtree(skill_dir, ignore_errors=True)
-            report.append("%s %s skill removed: %s" % (agent, invoke, skill_dir))
-    else:
-        os.makedirs(skill_dir, exist_ok=True)
-        shutil.copyfile(os.path.join(ASSETS_DIR, "SKILL.md"), target)
-        report.append("%s %s skill installed: %s" % (agent, invoke, target))
-        if agent == "codex":
             try:
-                report.append(_ensure_codex_writable_root(project_root))
-            except (OSError, _ConfigError) as e:
+                if scope == "project":
+                    env_mod.validate_child_file(project_root, target)
+                    if os.path.islink(skill_dir):
+                        raise OSError("refusing symlinked skill directory: %s" % skill_dir)
+                shutil.rmtree(skill_dir)
+            except OSError as e:
                 code = 1
-                report.append("ERROR: could not update Codex writable roots: %s" % e)
+                report.append("ERROR: could not remove %s %s skill: %s" % (agent, invoke, e))
+            else:
+                report.append("%s %s skill removed: %s" % (agent, invoke, skill_dir))
+    else:
+        try:
+            if scope == "project":
+                env_mod.ensure_child_dir(project_root, skill_dir)
+            else:
+                os.makedirs(skill_dir, exist_ok=True)
+            with open(os.path.join(ASSETS_DIR, "SKILL.md"), encoding="utf-8") as f:
+                skill_text = f.read()
+            _write_text_atomic(target, skill_text, root=project_root if scope == "project" else None)
+        except OSError as e:
+            return 1, [*report, "ERROR: could not install %s %s skill: %s" % (agent, invoke, e)]
+        report.append("%s %s skill installed: %s" % (agent, invoke, target))
+        if codex_writable_report:
+            report.append(codex_writable_report)
 
     report.extend(_warnings(agent, remove))
     return code, report
 
 
-def _ensure_codex_writable_root(project_root: str) -> str:
+def _ensure_codex_writable_root(project_root: str, scope: str = "project") -> str:
     config_path = os.path.expanduser("~/.codex/config.toml")
     # Use the validated data dir: a project config that tried to redirect it
     # outside the repo / ~/.ostinote is rejected, so we never grant the Codex
     # sandbox write access to an attacker-chosen path.
-    root = _home_relative(env_mod.data_dir_for(project_root))
+    root = codex_writable_root_for(project_root, scope)
     original = _read_text_or_empty(config_path)
     config = _parse_toml(config_path, original)
 
@@ -318,7 +406,10 @@ def _parse_toml(path: str, text: str) -> dict:
     try:
         return tomllib.loads(text)
     except tomllib.TOMLDecodeError as e:
-        raise _ConfigError("invalid TOML in %s: %s" % (path, e)) from e
+        line = getattr(e, "lineno", None)
+        col = getattr(e, "colno", None)
+        where = " at line %d column %d" % (line, col) if line and col else ""
+        raise _ConfigError("invalid TOML in %s%s: %s" % (path, where, e)) from e
 
 
 # Matches the start of a `writable_roots = [` array assignment and a

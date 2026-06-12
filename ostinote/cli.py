@@ -227,7 +227,8 @@ def _cmd_doctor(args) -> int:
 
 def _cmd_install(args) -> int:
     """Run install/uninstall per agent; exit 1 if any agent's install failed."""
-    root = os.path.abspath(args.cwd or os.getcwd())
+    raw_root = os.path.abspath(args.cwd or os.getcwd())
+    root = env_mod.worktree_root_for(raw_root) if args.scope == "project" else raw_root
     targets = agent_names() if args.agent == "all" else [args.agent]
     worst = 0
     for agent in targets:

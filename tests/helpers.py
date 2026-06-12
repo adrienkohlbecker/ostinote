@@ -79,14 +79,15 @@ def project_env(tmp_path, monkeypatch, extra_cfg=None):
     # ~/.ostinote is rejected as an untrusted redirect, so tests supply it via
     # the trusted user layer (the monkeypatched USER_CONFIG_PATH).
     user_cfg = tmp_path / "user-config.json"
-    user_cfg.write_text(json.dumps({"data_dir": str(tmp_path / "data")}), encoding="utf-8")
+    trusted_cfg = {"data_dir": str(tmp_path / "data")}
+    deep_update(trusted_cfg, base_test_config())
+    if extra_cfg:
+        deep_update(trusted_cfg, extra_cfg)
+    user_cfg.write_text(json.dumps(trusted_cfg), encoding="utf-8")
     monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", str(user_cfg))
     proj = tmp_path / "proj"
     (proj / ".ostinote").mkdir(parents=True)
-    cfg = base_test_config()
-    if extra_cfg:
-        deep_update(cfg, extra_cfg)
-    (proj / ".ostinote" / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
+    (proj / ".ostinote" / "config.json").write_text(json.dumps({"share_worktrees": False}), encoding="utf-8")
     return Env(str(proj))
 
 
@@ -168,7 +169,7 @@ def functional_cli_project(tmp_path, extra_cfg=None):
     cfg = base_test_config(recovery=False)
     if extra_cfg:
         deep_update(cfg, extra_cfg)
-    (proj / ".ostinote" / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
+    (proj / ".ostinote" / "config.json").write_text(json.dumps({"share_worktrees": False}), encoding="utf-8")
 
     # data_dir and summarizer.command are guarded keys honored only from the
     # trusted user layer; the subprocess resolves "~" to this temp HOME.
@@ -178,6 +179,7 @@ def functional_cli_project(tmp_path, extra_cfg=None):
             {
                 "data_dir": str(tmp_path / "data"),
                 "summarizer": {"command": [sys.executable, str(model)], "timeout": 5},
+                **cfg,
             }
         ),
         encoding="utf-8",

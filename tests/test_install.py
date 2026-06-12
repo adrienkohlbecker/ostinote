@@ -89,6 +89,14 @@ def test_install_session_end_events_per_agent(tmp_path, installer_env):
     install_mod.install("claude", "project", root)
     claude = json.loads((tmp_path / ".claude" / "settings.json").read_text())
     assert set(claude["hooks"]) == {"SessionStart", "PostToolUse", "PostToolUseFailure", "SessionEnd"}
+    session_start = claude["hooks"]["SessionStart"][0]["hooks"][0]
+    assert session_start["command"] == "/usr/bin/ostinote"
+    assert session_start["args"] == ["hook", "session-start", "--agent", "claude"]
+    assert "async" not in session_start
+    session_end = claude["hooks"]["SessionEnd"][0]["hooks"][0]
+    assert session_end["args"] == ["hook", "session-end", "--agent", "claude"]
+    assert session_end["async"] is True
+    assert session_end["timeout"] == 120
 
     # Codex has no SessionEnd; its turn-scoped Stop maps to the same handler.
     install_mod.install("codex", "project", root)
@@ -258,6 +266,23 @@ def test_codex_install_refuses_invalid_toml(tmp_path, installer_env):
     assert code == 1
     assert any(line.startswith("ERROR: could not update Codex writable roots") for line in report)
     assert config.read_text(encoding="utf-8") == "[sandbox_workspace_write\n"
+    assert not (tmp_path / "proj" / ".codex" / "hooks.json").exists()
+    assert not (tmp_path / "proj" / ".agents" / "skills" / "ostinote" / "SKILL.md").exists()
+
+
+def test_codex_user_install_grants_default_projects_parent(tmp_path, installer_env):
+    """User-scope Codex hooks need access to future default project memories."""
+    home = installer_env
+    root = str(tmp_path / "proj")
+    (tmp_path / "proj").mkdir()
+    config = _codex_config(home, "")
+
+    code, report = install_mod.install("codex", "user", root)
+
+    assert code == 0
+    assert "codex writable root added: ~/.ostinote/projects" in "\n".join(report)
+    data = tomllib.loads(config.read_text(encoding="utf-8"))
+    assert data["sandbox_workspace_write"]["writable_roots"] == ["~/.ostinote/projects"]
 
 
 def test_install_refuses_invalid_hook_json(tmp_path, installer_env):
@@ -338,6 +363,40 @@ def test_install_preserves_similar_and_nonconforming_hooks(tmp_path, installer_e
     assert "strange-group" in groups
 
 
+@pytest.mark.skipif(os.name == "nt", reason="symlink behavior differs on Windows")
+def test_project_install_refuses_symlinked_config_directory(tmp_path, installer_env):
+    """Do not follow project-owned symlinks when writing hook config."""
+    root = tmp_path / "proj"
+    outside = tmp_path / "outside"
+    root.mkdir()
+    outside.mkdir()
+    os.symlink(outside, root / ".codex")
+
+    code, report = install_mod.install("codex", "project", str(root))
+
+    assert code == 1
+    assert any("refusing unsafe project install path" in line for line in report)
+    assert not (outside / "hooks.json").exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlink behavior differs on Windows")
+def test_project_install_refuses_symlinked_skill_directory(tmp_path, installer_env):
+    """Do not follow project-owned symlinks when installing the skill file."""
+    root = tmp_path / "proj"
+    outside = tmp_path / "outside"
+    root.mkdir()
+    outside.mkdir()
+    (root / ".codex").mkdir()
+    (root / ".agents").mkdir()
+    os.symlink(outside, root / ".agents" / "skills")
+
+    code, report = install_mod.install("codex", "project", str(root))
+
+    assert code == 1
+    assert any("refusing unsafe project install path" in line for line in report)
+    assert not (outside / "ostinote" / "SKILL.md").exists()
+
+
 def test_uninstall_clean_project_does_not_create_hook_files(tmp_path, installer_env):
     """Uninstall should be a no-op for a project with no installed hooks.
 
@@ -352,7 +411,7 @@ def test_uninstall_clean_project_does_not_create_hook_files(tmp_path, installer_
     assert not (tmp_path / "proj" / ".agents").exists()
 
 
-def test_registered_events_tolerates_malformed_hooks(monkeypatch):
+def test_registered_events_tolerates_malformed_hooks():
     """Scan hook settings for managed events without crashing on bad shapes.
 
     Expected: a hooks file whose structures are malformed (non-dict `hooks`,
@@ -361,7 +420,6 @@ def test_registered_events_tolerates_malformed_hooks(monkeypatch):
     recognized — so `doctor` can diagnose a hand-broken config instead of
     dying on it.
     """
-    monkeypatch.setattr(install_mod, "_is_ours", lambda command: command == "OURS")
     assert install_mod.registered_events({"hooks": "not-a-dict"}) == set()
     settings = {
         "hooks": {
@@ -369,11 +427,25 @@ def test_registered_events_tolerates_malformed_hooks(monkeypatch):
             "Mixed": [
                 "string-group",
                 {"hooks": "not-a-list"},
-                {"hooks": ["not-a-dict", {"command": 123}, {"command": "OURS"}]},
+                {
+                    "hooks": [
+                        "not-a-dict",
+                        {"command": 123},
+                        {
+                            "type": "command",
+                            "command": "/usr/bin/ostinote",
+                            "args": ["hook", "session-start", "--agent", "codex"],
+                        },
+                        {"type": "command", "command": "/usr/bin/ostinote hook session-start --agent claude"},
+                    ]
+                },
             ],
         }
     }
     assert install_mod.registered_events(settings) == {"Mixed"}
+    assert install_mod.registered_events(settings, "codex") == {"Mixed"}
+    assert install_mod.registered_events(settings, "claude") == {"Mixed"}
+    assert install_mod.registered_events(settings, "unknown") == set()
 
 
 def test_doctor_smoke(tmp_path, monkeypatch, capsys, installer_env):
@@ -412,3 +484,83 @@ def test_doctor_smoke(tmp_path, monkeypatch, capsys, installer_env):
     claude_settings.write_text(json.dumps(data))
     assert doctor_mod.run(Env(str(proj))) == 1
     assert "hooks missing SessionEnd" in capsys.readouterr().out
+
+
+def test_doctor_reports_malformed_hook_config(tmp_path, monkeypatch, capsys, installer_env):
+    """Doctor should fail on unreadable hook config instead of silently skipping it."""
+    monkeypatch.setattr(doctor_mod.shutil, "which", lambda _: "/usr/bin/claude")
+    proj = tmp_path / "proj"
+    (proj / ".ostinote").mkdir(parents=True)
+    (proj / ".ostinote" / "config.json").write_text(json.dumps({"share_worktrees": False}), encoding="utf-8")
+    hooks_file = proj / ".codex" / "hooks.json"
+    hooks_file.parent.mkdir()
+    hooks_file.write_text("{", encoding="utf-8")
+
+    assert doctor_mod.run(Env(str(proj))) == 1
+    out = capsys.readouterr().out
+    assert "hook config unreadable" in out
+    assert str(hooks_file) in out
+
+
+def test_doctor_reports_wrong_agent_hooks(tmp_path, monkeypatch, capsys, installer_env):
+    """Doctor should not count `--agent claude` commands as Codex hooks."""
+    monkeypatch.setattr(doctor_mod.shutil, "which", lambda _: "/usr/bin/claude")
+    proj = tmp_path / "proj"
+    (proj / ".ostinote").mkdir(parents=True)
+    (proj / ".ostinote" / "config.json").write_text(json.dumps({"share_worktrees": False}), encoding="utf-8")
+    hooks_file = proj / ".codex" / "hooks.json"
+    hooks_file.parent.mkdir()
+    hooks_file.write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    event: [
+                        {"hooks": [{"type": "command", "command": "/usr/bin/ostinote hook %s --agent claude" % sub}]}
+                    ]
+                    for event, sub in install_mod._events_for("codex").items()
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert doctor_mod.run(Env(str(proj))) == 1
+    assert "wrong agent" in capsys.readouterr().out
+
+
+def test_doctor_reports_missing_skill_and_codex_writable_root(tmp_path, monkeypatch, capsys, installer_env):
+    """Doctor should check all surfaces installed for Codex hooks."""
+    monkeypatch.setattr(doctor_mod.shutil, "which", lambda _: "/usr/bin/claude")
+    proj = tmp_path / "proj"
+    (proj / ".ostinote").mkdir(parents=True)
+    (proj / ".ostinote" / "config.json").write_text(json.dumps({"share_worktrees": False}), encoding="utf-8")
+    # Install only the hook file, not the skill or ~/.codex/config.toml root.
+    hooks_file = proj / ".codex" / "hooks.json"
+    hooks_file.parent.mkdir()
+    settings = {}
+    install_mod._update_hooks(settings, "codex")
+    hooks_file.write_text(json.dumps(settings), encoding="utf-8")
+
+    assert doctor_mod.run(Env(str(proj))) == 1
+    out = capsys.readouterr().out
+    assert "skill missing" in out
+    assert "codex writable roots missing or invalid" in out
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlink behavior differs on Windows")
+def test_doctor_probe_does_not_follow_fixed_symlink(tmp_path, monkeypatch, capsys, installer_env):
+    """Doctor should not clobber a pre-planted .doctor-probe symlink."""
+    monkeypatch.setattr(doctor_mod.shutil, "which", lambda _: "/usr/bin/claude")
+    proj = tmp_path / "proj"
+    (proj / ".ostinote" / "state").mkdir(parents=True)
+    (proj / ".ostinote" / "config.json").write_text(
+        json.dumps({"share_worktrees": False, "data_dir": ".ostinote"}), encoding="utf-8"
+    )
+    target = tmp_path / "target.txt"
+    target.write_text("keep me", encoding="utf-8")
+    os.symlink(target, proj / ".ostinote" / "state" / ".doctor-probe")
+
+    doctor_mod.run(Env(str(proj)))
+
+    assert target.read_text(encoding="utf-8") == "keep me"
+    capsys.readouterr()
