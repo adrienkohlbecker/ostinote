@@ -218,12 +218,16 @@ def _cmd_doctor(args) -> int:
 
 
 def _cmd_install(args) -> int:
+    """Run install/uninstall per agent; exit 1 if any agent's install failed."""
     root = os.path.abspath(args.cwd or os.getcwd())
     targets = agent_names() if args.agent == "all" else [args.agent]
+    worst = 0
     for agent in targets:
-        for line in install_mod.install(agent, args.scope, root, remove=args.command == "uninstall"):
+        code, report = install_mod.install(agent, args.scope, root, remove=args.command == "uninstall")
+        worst = max(worst, code)
+        for line in report:
             print(line)
-    return 0
+    return worst
 
 
 def _status(env: Env) -> None:

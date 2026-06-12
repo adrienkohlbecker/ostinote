@@ -54,8 +54,9 @@ def test_skill_installed_per_agent_and_scope(tmp_path, monkeypatch):
     monkeypatch.setattr(install_mod, "self_command", lambda: ["/usr/bin/ostinote"])
 
     root = str(tmp_path / "proj")
-    report = install_mod.install("codex", "project", root)
+    code, report = install_mod.install("codex", "project", root)
     skill = tmp_path / "proj" / ".agents" / "skills" / "ostinote" / "SKILL.md"
+    assert code == 0
     assert "codex $ostinote skill installed" in "\n".join(report)
     assert skill.read_text().startswith("---")
 
@@ -439,6 +440,26 @@ def test_cli_hook_bad_arguments_still_exit_zero(tmp_path, monkeypatch):
     assert "hook no-such-event --agent codex" in errors.read_text(encoding="utf-8")
 
 
+def test_cli_install_propagates_failure_exit_code(tmp_path, monkeypatch, capsys):
+    """Make `ostinote install` fail loudly when hook registration fails.
+
+    Expected: a malformed existing hook config makes install() fail closed,
+    and main() returns 1 so scripted installs notice instead of relying on
+    ERROR text in stdout.
+    """
+    from ostinote import cli as cli_mod
+    from ostinote import install as install_mod
+
+    installer_home(tmp_path, monkeypatch)
+    monkeypatch.setattr(install_mod, "self_command", lambda: ["/usr/bin/ostinote"])
+    hooks_file = tmp_path / ".codex" / "hooks.json"
+    hooks_file.parent.mkdir()
+    hooks_file.write_text("{", encoding="utf-8")
+
+    assert cli_mod.main(["install", "codex", "--project", "--cwd", str(tmp_path)]) == 1
+    assert "ERROR" in capsys.readouterr().out
+
+
 def test_install_preserves_foreign_hooks(tmp_path, monkeypatch):
     """Keep user-defined hooks when adding Ostinote's managed hooks.
 
@@ -584,8 +605,9 @@ def test_codex_install_refuses_invalid_toml(tmp_path, monkeypatch):
     config.parent.mkdir(parents=True)
     config.write_text("[sandbox_workspace_write\n", encoding="utf-8")
 
-    report = install_mod.install("codex", "project", root)
+    code, report = install_mod.install("codex", "project", root)
 
+    assert code == 1
     assert any(line.startswith("ERROR: could not update Codex writable roots") for line in report)
     assert config.read_text(encoding="utf-8") == "[sandbox_workspace_write\n"
 
@@ -605,8 +627,9 @@ def test_install_refuses_invalid_hook_json(tmp_path, monkeypatch):
     hooks_file.parent.mkdir()
     hooks_file.write_text("{", encoding="utf-8")
 
-    report = install_mod.install("codex", "project", root)
+    code, report = install_mod.install("codex", "project", root)
 
+    assert code == 1
     assert report[0].startswith("ERROR: invalid JSON")
     assert hooks_file.read_text(encoding="utf-8") == "{"
     assert not (tmp_path / ".agents" / "skills" / "ostinote" / "SKILL.md").exists()
@@ -687,7 +710,7 @@ def test_uninstall_clean_project_does_not_create_hook_files(tmp_path, monkeypatc
     root = str(tmp_path / "proj")
     (tmp_path / "proj").mkdir()
 
-    assert install_mod.install("codex", "project", root, remove=True) == []
+    assert install_mod.install("codex", "project", root, remove=True) == (0, [])
     assert not (tmp_path / "proj" / ".codex").exists()
     assert not (tmp_path / "proj" / ".agents").exists()
 

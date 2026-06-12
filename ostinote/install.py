@@ -223,8 +223,14 @@ def _hooks_file_for(agent: str, scope: str, project_root: str) -> str:
     return os.path.join(base, "hooks.json")
 
 
-def install(agent: str, scope: str, project_root: str, remove: bool = False) -> list[str]:
-    """(Un)register hooks and the /ostinote command. Returns report lines."""
+def install(agent: str, scope: str, project_root: str, remove: bool = False) -> tuple[int, list[str]]:
+    """(Un)register hooks and the /ostinote command.
+
+    Returns ``(exit_code, report_lines)``. The code is 1 when any step failed
+    (unreadable or invalid hook config, Codex sandbox config rejected), so
+    callers and scripts can fail closed instead of parsing the report text.
+    """
+    code = 0
     report = []
     path = _hooks_file_for(agent, scope, project_root)
     if not remove or os.path.exists(path):
@@ -233,7 +239,7 @@ def install(agent: str, scope: str, project_root: str, remove: bool = False) -> 
             settings = _update_hooks(settings, agent, remove_only=remove)
         except _ConfigError as e:
             report.append("ERROR: %s" % e)
-            return report
+            return 1, report
         _write_json(path, settings)
         report.append("%s hooks %s: %s" % (agent, "removed from" if remove else "registered in", path))
 
@@ -257,10 +263,11 @@ def install(agent: str, scope: str, project_root: str, remove: bool = False) -> 
             try:
                 report.append(_ensure_codex_writable_root(project_root))
             except (OSError, _ConfigError) as e:
+                code = 1
                 report.append("ERROR: could not update Codex writable roots: %s" % e)
 
     report.extend(_warnings(agent, remove))
-    return report
+    return code, report
 
 
 def _ensure_codex_writable_root(project_root: str) -> str:
