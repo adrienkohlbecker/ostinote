@@ -741,37 +741,34 @@ def test_registered_events_tolerates_malformed_hooks(monkeypatch):
     assert install_mod.registered_events(settings) == {"Mixed"}
 
 
-def test_doctor_smoke(tmp_path, monkeypatch, capsys):
+def test_doctor_smoke(tmp_path, monkeypatch, capsys, installer_env):
     """Smoke-test `doctor` against a project with both agents installed.
 
-    Expected: a fully registered project passes with no FAIL lines; after
-    deleting Claude's SessionEnd hook, doctor returns failure and prints a
-    missing-hook diagnostic.
+    Expected: a fully registered project passes with no FAIL lines; the codex
+    install records the memory dir as a writable root in the temp home's
+    config.toml (never the real one); after deleting Claude's SessionEnd hook,
+    doctor returns failure and prints a missing-hook diagnostic.
     """
     from ostinote import doctor as doctor_mod
     from ostinote import install as install_mod
     from ostinote.env import Env
 
-    monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", str(tmp_path / "user.json"))
-    (tmp_path / "user.json").write_text(json.dumps({"data_dir": str(tmp_path / "data")}))
-    monkeypatch.setattr(doctor_mod, "HOOK_ERRORS_PATH", str(tmp_path / "hook-errors.log"))
+    home = installer_env
+    (home / ".ostinote").mkdir(parents=True)
+    (home / ".ostinote" / "config.json").write_text(json.dumps({"data_dir": str(tmp_path / "data")}))
     monkeypatch.setattr(doctor_mod.shutil, "which", lambda _: "/usr/bin/claude")
-    monkeypatch.setattr(install_mod, "self_command", lambda: ["/usr/bin/ostinote"])
 
     proj = tmp_path / "proj"
     (proj / ".ostinote").mkdir(parents=True)
     (proj / ".ostinote" / "config.json").write_text(json.dumps({"share_worktrees": False}))
     install_mod.install("claude", "project", str(proj))
     install_mod.install("codex", "project", str(proj))
-    # Keep the user-scope lookup away from the real home directory.
-    project_only = install_mod._hooks_file_for
-    monkeypatch.setattr(
-        doctor_mod,
-        "_hooks_file_for",
-        lambda agent, scope, root: (
-            project_only(agent, scope, root) if scope == "project" else str(tmp_path / "no-user-hooks.json")
-        ),
-    )
+    # The sandbox grant must land in the temp home's Codex config (the real
+    # ~/.codex/config.toml used to be rewritten here) and name the memory dir.
+    codex_cfg = tomllib.loads((home / ".codex" / "config.toml").read_text(encoding="utf-8"))
+    assert codex_cfg["sandbox_workspace_write"]["writable_roots"] == [
+        os.path.realpath(str(tmp_path / "data")),
+    ]
 
     assert doctor_mod.run(Env(str(proj))) == 0
     out = capsys.readouterr().out
