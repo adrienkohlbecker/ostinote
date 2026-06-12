@@ -31,7 +31,9 @@ run = ["ruff check --fix .", "ruff format ."]
 
 [tasks.build]
 description = "Build sdist and wheel into dist/ and validate PyPI metadata"
-run = ["rm -rf dist", "uv build", "uvx twine check dist/*"]
+# twine is pinned: an unpinned uvx fetch in the release path is an
+# unnecessary supply-chain trust grant
+run = ["rm -rf dist", "uv build", "uvx twine@6.2.0 check dist/*"]
 
 [tasks.install]
 description = "(Re)install the global `ostinote` CLI from this checkout (editable)"
