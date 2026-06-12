@@ -38,7 +38,10 @@ class SessionState:
         try:
             with open(path, encoding="utf-8") as f:
                 data = json.load(f)
-            state.transcript_path = data.get("transcript_path", "")
+            # Canonicalize stored paths defensively; "" must stay "" because
+            # realpath("") resolves to the process cwd.
+            raw_path = data.get("transcript_path", "")
+            state.transcript_path = os.path.realpath(raw_path) if raw_path else ""
             state.line = int(data.get("line", 0))
             state.last_attempt_ts = float(data.get("last_attempt_ts", 0))
             state.last_save_ts = float(data.get("last_save_ts", 0))

@@ -31,6 +31,21 @@ def test_session_state_roundtrip(tmp_path):
     assert other.line == 0
 
 
+def test_session_state_canonicalizes_transcript_path(tmp_path):
+    """Resolve stored transcript paths on load.
+
+    Expected: a `..`-laden path written by an older version (or a tampered
+    state file) comes back canonicalized, so the hooks' path comparisons see
+    one identity per transcript.
+    """
+    sessions = str(tmp_path / "sessions")
+    s = SessionState.load(sessions, "codex", "id-2")
+    s.transcript_path = str(tmp_path / "sub" / ".." / "t.jsonl")
+    s.save()
+    s2 = SessionState.load(sessions, "codex", "id-2")
+    assert s2.transcript_path == os.path.realpath(str(tmp_path / "t.jsonl"))
+
+
 def test_pid_lock(tmp_path):
     """Allow only one holder for a PID lock at a time.
 

@@ -1,4 +1,5 @@
 import json
+import os
 import tomllib
 
 import pytest
@@ -236,6 +237,101 @@ def test_session_start_queues_consolidation_without_injecting_on_resume(tmp_path
 
     assert queued == [["consolidate", "--cwd", env.cwd]]
     assert capsys.readouterr().out == ""
+
+
+def test_session_start_truncates_oversized_memory(tmp_path, monkeypatch, capsys):
+    """Cap per-file memory injection so a runaway file cannot flood context.
+
+    Expected: an oversized recent.md is injected tail-first with a truncation
+    marker, keeping the newest entries and dropping the oldest.
+    """
+    import io
+
+    from ostinote import hooks as hooks_mod
+
+    env = project_env(tmp_path, monkeypatch, {"features": {"recovery": False, "consolidation": False}})
+    env.ensure_dirs()
+    body = "OLD-HEAD\n" + ("x" * 200_000) + "\nNEW-TAIL"
+    (tmp_path / "data" / "recent.md").write_text(body, encoding="utf-8")
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"cwd": env.cwd})))
+
+    hooks_mod.session_start("claude")
+
+    out = capsys.readouterr().out
+    assert "[earlier content truncated]" in out
+    assert "NEW-TAIL" in out
+    assert "OLD-HEAD" not in out
+
+
+def test_hooks_canonicalize_transcript_path(tmp_path, monkeypatch):
+    """Resolve dot-dot segments before paths reach state or subprocesses.
+
+    Expected: `post_tool` stores and queues the canonical transcript path, so
+    a symlinked or `..`-laden path cannot alias one transcript into two
+    session identities.
+    """
+    import io
+
+    from ostinote import hooks as hooks_mod
+
+    env = project_env(tmp_path, monkeypatch)
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text("{}\n{}\n{}\n", encoding="utf-8")
+    (tmp_path / "sub").mkdir()
+    indirect = str(tmp_path / "sub" / ".." / "session.jsonl")
+    queued = []
+    monkeypatch.setattr(hooks_mod, "spawn", lambda _env, args: queued.append(args))
+    monkeypatch.setattr(
+        "sys.stdin",
+        io.StringIO(json.dumps({"cwd": env.cwd, "transcript_path": indirect, "session_id": "s1"})),
+    )
+
+    hooks_mod.post_tool("codex")
+
+    canonical = os.path.realpath(str(transcript))
+    state = SessionState.load(env.sessions_dir, "codex", "s1")
+    assert state.transcript_path == canonical
+    assert queued and queued[0][queued[0].index("--transcript") + 1] == canonical
+
+
+def test_spawn_failure_is_logged_not_raised(tmp_path, monkeypatch):
+    """Keep hooks alive when the background subprocess cannot start.
+
+    Expected: a missing ostinote executable produces a `spawn failed` line in
+    the daily log instead of raising into the hook handler.
+    """
+    from ostinote import hooks as hooks_mod
+
+    env = project_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(hooks_mod, "self_command", lambda: [str(tmp_path / "missing-exe")])
+
+    hooks_mod.spawn(env, ["save", "--agent", "codex"])
+
+    logs = list((tmp_path / "data" / "logs").glob("memory-*.log"))
+    assert logs and "spawn failed (save)" in logs[0].read_text(encoding="utf-8")
+
+
+def test_malformed_hook_input_is_logged(tmp_path, monkeypatch):
+    """Record undecodable hook payloads instead of failing silently.
+
+    Expected: garbage on stdin leaves `post_tool` a no-op but writes an
+    `unreadable hook input` diagnostic to the project log.
+    """
+    import io
+
+    from ostinote import hooks as hooks_mod
+
+    env = project_env(tmp_path, monkeypatch)
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    monkeypatch.chdir(tmp_path / "proj")  # the fallback env resolves from cwd
+    monkeypatch.setattr("sys.stdin", io.StringIO("not json"))
+
+    hooks_mod.post_tool("codex")
+
+    logs = list((tmp_path / "data" / "logs").glob("memory-*.log"))
+    assert logs and "unreadable hook input" in logs[0].read_text(encoding="utf-8")
+    assert env.cwd  # env fixture used; no save state should exist
+    assert not os.path.exists(env.sessions_dir) or os.listdir(env.sessions_dir) == []
 
 
 # --- CLI ------------------------------------------------------------------------------

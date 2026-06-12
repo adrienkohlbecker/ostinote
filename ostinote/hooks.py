@@ -33,12 +33,21 @@ _RECOVERY_MAX = 3
 _MEMORY_INJECT_MAX_CHARS = 100_000
 
 
-def read_hook_input() -> dict:
+def read_hook_input() -> tuple[dict, str]:
+    """Read the hook JSON payload from stdin.
+
+    Returns ``(data, error)``: data is ``{}`` when stdin is empty or
+    malformed, and error is a one-line diagnostic ("" on success). Parsing
+    happens before the project Env exists, so the caller logs the error
+    once it has one.
+    """
     try:
         data = json.load(sys.stdin)
-        return data if isinstance(data, dict) else {}
-    except (json.JSONDecodeError, OSError, ValueError):
-        return {}
+    except (OSError, ValueError) as exc:  # JSONDecodeError is a ValueError
+        return {}, "unreadable hook input: %s" % exc
+    if not isinstance(data, dict):
+        return {}, "hook input is not a JSON object"
+    return data, ""
 
 
 def env_from_hook(data: dict) -> Env:
@@ -58,7 +67,12 @@ def self_command() -> list[str]:
 
 
 def spawn(env: Env, args: list[str]) -> None:
-    """Launch a fully detached background subprocess, output to the log."""
+    """Launch a fully detached background subprocess, output to the log.
+
+    Failures are logged, never raised: a save that cannot start must not
+    break the calling hook (the CLI wrapper would swallow the exception
+    silently, leaving no trace of why saves stopped happening).
+    """
     env.ensure_dirs()
     log_path = os.path.join(env.logs_dir, "background.log")
     detach: dict = {}
@@ -68,15 +82,47 @@ def spawn(env: Env, args: list[str]) -> None:
         detach["creationflags"] = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
     else:
         detach["start_new_session"] = True
-    with open(log_path, "ab") as log:
-        subprocess.Popen(
-            self_command() + args,
-            stdin=subprocess.DEVNULL,
-            stdout=log,
-            stderr=log,
-            cwd=env.cwd,
-            **detach,
-        )
+    try:
+        with open(log_path, "ab") as log:
+            # Background output can quote transcript content; owner-only.
+            os.chmod(log_path, 0o600)
+            subprocess.Popen(
+                self_command() + args,
+                stdin=subprocess.DEVNULL,
+                stdout=log,
+                stderr=log,
+                cwd=env.cwd,
+                **detach,
+            )
+    except OSError as exc:
+        env.log("hook", "spawn failed (%s): %s" % (args[0] if args else "?", exc))
+
+
+def _save_args(agent_name: str, session_id: str, transcript_path: str, cwd: str, *flags: str) -> list[str]:
+    """argv for an ``ostinote save`` subprocess; flags are extras like --force."""
+    args = ["save", "--agent", agent_name, "--session", session_id]
+    args += ["--transcript", transcript_path, "--cwd", cwd]
+    args += flags
+    return args
+
+
+def _load_session(data: dict, env: Env, agent_name: str) -> tuple[str, str, SessionState] | None:
+    """Validate hook input and load the matching session state.
+
+    Returns ``(session_id, transcript_path, state)`` with transcript_path
+    canonicalized, or None when there is no readable transcript to act on.
+    Falls back to the transcript filename when the harness omits session_id.
+    """
+    transcript_path = data.get("transcript_path") or ""
+    if not transcript_path or not os.path.exists(transcript_path):
+        return None
+    # Canonicalize before the path is stored in state or handed to a
+    # subprocess: a symlinked or ..-laden path must not alias one
+    # transcript into two session identities.
+    transcript_path = os.path.realpath(transcript_path)
+    session_id = data.get("session_id") or os.path.basename(transcript_path).rsplit(".", 1)[0]
+    state = SessionState.load(env.sessions_dir, agent_name, session_id)
+    return session_id, transcript_path, state
 
 
 def emit(agent_name: str, event_name: str, text: str) -> None:
@@ -102,9 +148,11 @@ def emit(agent_name: str, event_name: str, text: str) -> None:
 
 
 def session_start(agent_name: str) -> None:
-    data = read_hook_input()
+    data, input_err = read_hook_input()
     env = env_from_hook(data)
     env.ensure_dirs()
+    if input_err:
+        env.log("hook", input_err)
     source = data.get("source") or "startup"
     env.log("hook", "session-start (%s, %s): root=%s" % (agent_name, source, env.project_root))
 
@@ -191,21 +239,7 @@ def _recover_missed(env: Env) -> int:
 
     candidates.sort(reverse=True, key=lambda pair: pair[0])
     for _, state in candidates[:_RECOVERY_MAX]:
-        spawn(
-            env,
-            [
-                "save",
-                "--agent",
-                state.agent,
-                "--session",
-                state.session_id,
-                "--transcript",
-                state.transcript_path,
-                "--cwd",
-                env.cwd,
-                "--force",
-            ],
-        )
+        spawn(env, _save_args(state.agent, state.session_id, state.transcript_path, env.cwd, "--force"))
     return len(candidates[:_RECOVERY_MAX])
 
 
@@ -221,54 +255,36 @@ def session_end(agent_name: str) -> None:
     min-human-messages gate, so it costs a model call at most once per few
     exchanges.
     """
-    data = read_hook_input()
+    data, input_err = read_hook_input()
     env = env_from_hook(data)
+    if input_err:
+        env.log("hook", input_err)
 
-    transcript_path = data.get("transcript_path") or ""
-    session_id = data.get("session_id") or ""
-    if not transcript_path or not os.path.exists(transcript_path):
+    session = _load_session(data, env, agent_name)
+    if session is None:
         return
-    if not session_id:
-        session_id = os.path.basename(transcript_path).rsplit(".", 1)[0]
-
-    state = SessionState.load(env.sessions_dir, agent_name, session_id)
+    session_id, transcript_path, state = session
     if _count_lines(transcript_path) <= state.line:
         return  # nothing new since the last save
 
     env.log("hook", "session-end (%s): queueing final save of %s" % (agent_name, session_id))
-    spawn(
-        env,
-        [
-            "save",
-            "--agent",
-            agent_name,
-            "--session",
-            session_id,
-            "--transcript",
-            transcript_path,
-            "--cwd",
-            env.cwd,
-            "--final",
-        ],
-    )
+    spawn(env, _save_args(agent_name, session_id, transcript_path, env.cwd, "--final"))
 
 
 # --- PostToolUse ---------------------------------------------------------------
 
 
 def post_tool(agent_name: str) -> None:
-    data = read_hook_input()
+    data, input_err = read_hook_input()
     env = env_from_hook(data)
+    if input_err:
+        env.log("hook", input_err)
 
-    transcript_path = data.get("transcript_path") or ""
-    session_id = data.get("session_id") or ""
-    if not transcript_path or not os.path.exists(transcript_path):
+    session = _load_session(data, env, agent_name)
+    if session is None:
         return
-    if not session_id:
-        session_id = os.path.basename(transcript_path).rsplit(".", 1)[0]
-
+    session_id, transcript_path, state = session
     current_lines = _count_lines(transcript_path)
-    state = SessionState.load(env.sessions_dir, agent_name, session_id)
 
     # Register the session so recovery can find it even if no save ever ran.
     if state.transcript_path != transcript_path:
@@ -287,20 +303,7 @@ def post_tool(agent_name: str) -> None:
         "hook",
         "post-tool (%s): delta %d lines, queueing save of %s" % (agent_name, delta, session_id),
     )
-    spawn(
-        env,
-        [
-            "save",
-            "--agent",
-            agent_name,
-            "--session",
-            session_id,
-            "--transcript",
-            transcript_path,
-            "--cwd",
-            env.cwd,
-        ],
-    )
+    spawn(env, _save_args(agent_name, session_id, transcript_path, env.cwd))
 
 
 def _count_lines(path: str) -> int:
