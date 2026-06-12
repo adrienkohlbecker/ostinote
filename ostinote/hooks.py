@@ -28,6 +28,9 @@ from .state import SessionState, all_states
 _RECOVERY_ACTIVE_WINDOW = 300
 # Recover at most this many missed sessions per session start (cost bound).
 _RECOVERY_MAX = 3
+# Per-file cap on memory content injected at session start; a runaway file
+# must not blow up every future session's context.
+_MEMORY_INJECT_MAX_CHARS = 100_000
 
 
 def read_hook_input() -> dict:
@@ -150,6 +153,9 @@ def session_start(agent_name: str) -> None:
                 content = f.read().strip()
         except OSError:
             continue
+        if len(content) > _MEMORY_INJECT_MAX_CHARS:
+            # Keep the tail: these files append, so recent entries are last.
+            content = "[earlier content truncated]\n" + content[-_MEMORY_INJECT_MAX_CHARS:]
         if content:
             blocks.append("--- %s ---\n%s" % (os.path.basename(path), content))
     if blocks:
