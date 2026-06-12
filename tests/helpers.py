@@ -122,6 +122,8 @@ def functional_cli_project(tmp_path, extra_cfg=None):
 
 
 def run_cli(args, cwd, env, **kwargs):
+    # A regression that blocks on stdin must fail the test, not hang CI.
+    kwargs.setdefault("timeout", 60)
     return subprocess.run(
         [sys.executable, "-m", "ostinote", *args],
         cwd=cwd,

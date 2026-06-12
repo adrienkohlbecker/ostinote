@@ -137,6 +137,7 @@ def test_cli_install_codex_hook_functional_injects_memory(tmp_path):
         env=env,
         capture_output=True,
         text=True,
+        timeout=60,
     )
 
     assert hook.returncode == 0, hook.stderr

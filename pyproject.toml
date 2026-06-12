@@ -64,3 +64,9 @@ ignore = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+minversion = "9.0"
+addopts = ["-ra", "--strict-config", "--strict-markers"]
+filterwarnings = ["error"]
+# Dump thread tracebacks if a test (e.g. a stdin-blocked subprocess) hangs.
+faulthandler_timeout = 120
+tmp_path_retention_policy = "failed"
