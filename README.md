@@ -1,5 +1,10 @@
 # ostinote — continuous memory for coding agents
 
+[![PyPI](https://img.shields.io/pypi/v/ostinote)](https://pypi.org/project/ostinote/)
+[![CI](https://github.com/adrienkohlbecker/ostinote/actions/workflows/ci.yml/badge.svg)](https://github.com/adrienkohlbecker/ostinote/actions/workflows/ci.yml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://pypi.org/project/ostinote/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE.md)
+
 **Shared, persistent memory for your coding agents.** Works with both **Claude Code** and **Codex CLI** at the same time, in the same project — every session starts already knowing what you worked on yesterday, what decisions were made, and what's next.
 
 Coding agents start every session blank. You re-explain the project, the conventions, the thing that broke last Tuesday. `ostinote` fixes that: it quietly captures your sessions as you work, compresses them into short daily summaries using Claude Haiku (a few cents per day), and injects them back into context whenever a new session starts — no matter which agent you open.
@@ -14,8 +19,8 @@ Your agent, today in Claude Code:  already knows.
 ## Quick start
 
 ```bash
-# 1. Install the CLI (any Python 3.11+; pipx works too)
-uv tool install --editable /path/to/this/repo
+# 1. Install the CLI (any Python 3.11+; `pipx install ostinote` works too)
+uv tool install ostinote
 
 # 2. Hook it into your agents (one-time, global)
 ostinote install claude
@@ -28,16 +33,9 @@ By default your memory lives **outside** your repos, in `~/.ostinote/projects/<p
 
 Codex will ask you to trust the new hooks once on its next start. To stop using it: `ostinote uninstall all`.
 
-> **Migrating from the `remember` Claude Code marketplace plugin?** Disable it first (`/plugin`), or both will save the same sessions twice. The on-disk formats, project slugs, and config keys are all compatible: old in-repo `.remember/` folders keep working with `"data_dir": ".remember"`, external-mode trees keep working with `"data_dir": "~/.remember/{slug}"` (same folder names), or copy their contents into `~/.ostinote/projects/<slug>/`. Old config files can be reused as-is — renamed keys like `ndc_seconds` and `ndc_compression` are still understood — but copy them to ostinote's locations: `~/.remember/config.json` → `~/.ostinote/config.json`, and a per-project `.remember/config.json` → `.ostinote/config.json` (ostinote never reads config from inside the data dir).
+> **Migrating from the `remember` Claude Code marketplace plugin?** Disable it first (`/plugin`), or both will save the same sessions twice. Formats and config keys are compatible — see [Migrating from the `remember` plugin](#migrating-from-the-remember-plugin).
 
 **Requirements:** Python 3.11+ and the `claude` CLI (used for summarization, with Haiku). Works on macOS and Linux; Windows is supported in the code (no bash needed) but hasn't seen real-world testing yet.
-
-## What you get
-
-- **Automatic capture.** While you work, new conversation is periodically summarized into one-line entries — no prompting, no copy-pasting.
-- **Memory on session start.** Every new session (Claude or Codex) begins with your project's memory injected: today's activity, the last 7 days, older history, and an optional identity file.
-- **One memory, every agent.** Both agents read and write the same per-project memory folder. Run five sessions in parallel across both tools — including in git worktrees — and they all feed the same memory without stepping on each other.
-- **Core memories on demand.** Type `/ostinote <what to remember>` (`$ostinote` in Codex) and the agent appends it to `core-memories.md` — a dated one-liner that every future session (either agent) sees verbatim, forever.
 
 ## How it works
 
@@ -200,6 +198,10 @@ Optional. Create `~/.ostinote/config.json` (applies everywhere) or `<project>/.o
 ## Adding another agent
 
 The agent-specific surface is deliberately small: a transcript parser (`ostinote/agents/<name>.py`, ~80 lines — turn the agent's session log into a list of human/assistant messages) and an installer entry that writes its hook config. Everything else — storage, locking, summarization, consolidation, recovery — is shared.
+
+## Migrating from the `remember` plugin
+
+Coming from the `remember` Claude Code marketplace plugin? Disable it first (`/plugin`), or both will save the same sessions twice. The on-disk formats, project slugs, and config keys are all compatible: old in-repo `.remember/` folders keep working with `"data_dir": ".remember"`, external-mode trees keep working with `"data_dir": "~/.remember/{slug}"` (same folder names), or copy their contents into `~/.ostinote/projects/<slug>/`. Old config files can be reused as-is — renamed keys like `ndc_seconds` and `ndc_compression` are still understood — but copy them to ostinote's locations: `~/.remember/config.json` → `~/.ostinote/config.json`, and a per-project `.remember/config.json` → `.ostinote/config.json` (ostinote never reads config from inside the data dir).
 
 ## Relationship to claude-remember
 
