@@ -122,6 +122,7 @@ def test_cli_status_costs_functional_reports_day_totals(tmp_path):
     assert rows["total"] == ["total", "2", "300", "50", "60", "$0.0001"]
 
 
+@pytest.mark.skipif(os.name == "nt", reason="drives the hook through a #!/bin/sh wrapper and POSIX shlex quoting")
 def test_cli_install_codex_hook_functional_injects_memory(tmp_path):
     """Install Codex project hooks, then execute the generated hook command.
 

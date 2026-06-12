@@ -44,14 +44,17 @@ def test_session_state_roundtrip(tmp_path):
     state file.
     """
     sessions = str(tmp_path / "sessions")
+    # load() realpaths the stored transcript, so the expectation must be a
+    # canonical platform path — a bare "/t.jsonl" gains a drive on Windows.
+    transcript = os.path.realpath(str(tmp_path / "t.jsonl"))
     s = SessionState.load(sessions, "codex", "id-1")
     assert s.line == 0
     s.line = 42
-    s.transcript_path = "/t.jsonl"
+    s.transcript_path = transcript
     s.last_save_ts = 123.0
     s.save()
     s2 = SessionState.load(sessions, "codex", "id-1")
-    assert (s2.line, s2.transcript_path, s2.last_save_ts) == (42, "/t.jsonl", 123.0)
+    assert (s2.line, s2.transcript_path, s2.last_save_ts) == (42, transcript, 123.0)
     # Parallel sessions don't collide.
     other = SessionState.load(sessions, "claude", "id-1")
     assert other.line == 0
