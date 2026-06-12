@@ -30,7 +30,9 @@ Treat this as infrastructure for agent memory: keep behavior predictable, preser
 Before finishing code changes, run the narrowest useful check plus the full checks when practical:
 
 ```bash
-mise run test
+mise run test                          # full suite
+mise run test -- -m "not functional"   # skip the end-to-end subprocess tests (fast inner loop)
+mise run test -- tests/test_hooks.py   # one area module; extra args pass through to pytest
 mise run lint
 ```
 
