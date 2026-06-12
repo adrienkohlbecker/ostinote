@@ -106,13 +106,14 @@ def test_session_start_source_filter(tmp_path, monkeypatch, capsys, source, inje
 
     from ostinote import hooks as hooks_mod
 
-    monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", str(tmp_path / "no-user.json"))
+    user_cfg = tmp_path / "user.json"
+    user_cfg.write_text(json.dumps({"data_dir": str(tmp_path / "data")}))
+    monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", str(user_cfg))
     proj = tmp_path / "proj"
     (proj / ".ostinote").mkdir(parents=True)
     (proj / ".ostinote" / "config.json").write_text(
         json.dumps(
             {
-                "data_dir": str(tmp_path / "data"),
                 "share_worktrees": False,
                 "features": {"recovery": False, "consolidation": False},
             }
@@ -615,15 +616,14 @@ def test_doctor_smoke(tmp_path, monkeypatch, capsys):
     from ostinote.env import Env
 
     monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", str(tmp_path / "user.json"))
+    (tmp_path / "user.json").write_text(json.dumps({"data_dir": str(tmp_path / "data")}))
     monkeypatch.setattr(doctor_mod, "HOOK_ERRORS_PATH", str(tmp_path / "hook-errors.log"))
     monkeypatch.setattr(doctor_mod.shutil, "which", lambda _: "/usr/bin/claude")
     monkeypatch.setattr(install_mod, "self_command", lambda: ["/usr/bin/ostinote"])
 
     proj = tmp_path / "proj"
     (proj / ".ostinote").mkdir(parents=True)
-    (proj / ".ostinote" / "config.json").write_text(
-        json.dumps({"data_dir": str(tmp_path / "data"), "share_worktrees": False})
-    )
+    (proj / ".ostinote" / "config.json").write_text(json.dumps({"share_worktrees": False}))
     install_mod.install("claude", "project", str(proj))
     install_mod.install("codex", "project", str(proj))
     # Keep the user-scope lookup away from the real home directory.

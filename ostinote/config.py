@@ -63,6 +63,44 @@ LEGACY_KEYS = {
     ("features", "ndc_compression"): ("features", "hourly_compression"),
 }
 
+# The project layer (``<project>/.ostinote/config.json``) is attacker-controlled
+# the moment a repo is cloned, yet a session's hooks load it automatically. A
+# few keys are too dangerous to honor from there:
+#   - ``summarizer.command`` is executed as a subprocess on every save, so a
+#     cloned repo setting it is straightforward remote code execution. It is
+#     stripped from the project layer outright (no legitimate per-repo use).
+#   - ``data_dir`` decides where memory is written and what the Codex installer
+#     grants sandbox write access to. It stays settable per-project (the in-repo
+#     ``.ostinote`` workflow needs it) but is flagged so ``Env`` can reject a
+#     value that escapes the repo or the user's ostinote home.
+# User-level config is trusted and may set either freely.
+_PROJECT_DENIED = (("summarizer", "command"),)
+_PROJECT_GUARDED = (("data_dir",),)
+
+
+def _walk(cfg: dict, path: tuple) -> dict | None:
+    """Return the parent dict holding ``path[-1]``, or None if any ancestor is
+    missing or not a dict. Used to inspect/strip nested keys by path tuple."""
+    section = cfg
+    for key in path[:-1]:
+        section = section.get(key) if isinstance(section, dict) else None
+        if not isinstance(section, dict):
+            return None
+    return section if isinstance(section, dict) else None
+
+
+def _strip_path(cfg: dict, path: tuple) -> None:
+    """Delete the nested key at ``path`` from ``cfg`` in place, if present."""
+    parent = _walk(cfg, path)
+    if parent is not None:
+        parent.pop(path[-1], None)
+
+
+def _has_path(cfg: dict, path: tuple) -> bool:
+    """True if the nested key at ``path`` is set in ``cfg``."""
+    parent = _walk(cfg, path)
+    return parent is not None and path[-1] in parent
+
 
 def _normalize_legacy(cfg: dict) -> dict:
     for (old_section, old_key), (new_section, new_key) in LEGACY_KEYS.items():
@@ -95,7 +133,34 @@ def _read_json(path: str) -> dict:
 
 
 def load(project_root: str) -> dict:
-    cfg = _merge(DEFAULTS, _normalize_legacy(_read_json(USER_CONFIG_PATH)))
-    project = _read_json(os.path.join(project_root, ".ostinote", "config.json"))
-    cfg = _merge(cfg, _normalize_legacy(project))
+    """Return the merged config for a project.
+
+    Layers DEFAULTS, then the user config, then the project config (each later
+    layer overriding earlier ones; nested dicts merge key-by-key). Legacy
+    claude-remember key names are normalized in every layer. This never raises:
+    a missing, unreadable, or malformed config file loads as empty, so a broken
+    file silently falls back to defaults (``ostinote doctor`` surfaces the
+    breakage out loud). Untrusted project-layer keys are filtered per
+    ``load_trusted``; use that variant when you also need to know which guarded
+    keys the project tried to set.
+    """
+    cfg, _ = load_trusted(project_root)
     return cfg
+
+
+def load_trusted(project_root: str) -> tuple[dict, set]:
+    """Load layered config and report guarded keys the project layer set.
+
+    Same merge as ``load``, but the project layer is treated as untrusted:
+    ``_PROJECT_DENIED`` keys are dropped from it before merging, and the
+    returned set names the ``_PROJECT_GUARDED`` key paths the project config
+    tried to set (e.g. ``{("data_dir",)}``) so ``Env`` can validate them
+    against the trusted default. The user layer is never filtered.
+    """
+    cfg = _merge(DEFAULTS, _normalize_legacy(_read_json(USER_CONFIG_PATH)))
+    project = _normalize_legacy(_read_json(os.path.join(project_root, ".ostinote", "config.json")))
+    for path in _PROJECT_DENIED:
+        _strip_path(project, path)
+    guarded = {path for path in _PROJECT_GUARDED if _has_path(project, path)}
+    cfg = _merge(cfg, project)
+    return cfg, guarded

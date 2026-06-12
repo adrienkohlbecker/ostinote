@@ -15,6 +15,7 @@ config, and owns the data-directory layout:
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import subprocess
@@ -56,24 +57,91 @@ def _git_main_root(cwd: str) -> str:
     return cwd
 
 
+def _resolve_root_config(cwd: str) -> tuple[str, dict, set]:
+    """Resolve (project_root, cfg, guarded) for a session cwd.
+
+    The root is the main checkout (worktrees collapsed) so parallel worktree
+    sessions share one memory — unless the resolved project opts out via
+    ``share_worktrees: false``, in which case the worktree's own checkout is
+    used instead. ``guarded`` is the set of untrusted project keys that need
+    validation (see ``config.load_trusted``).
+    """
+    cwd = os.path.abspath(cwd)
+    root = _git_main_root(cwd)
+    cfg, guarded = config_mod.load_trusted(root)
+    if not cfg["share_worktrees"]:
+        # Opted out of shared memory: re-resolve against this worktree's own
+        # checkout, which may carry a different project config (including this
+        # flag itself). Reloading is required, not redundant — the project
+        # layer can differ between the two roots; the user layer cannot.
+        root = cwd
+        cfg, guarded = config_mod.load_trusted(root)
+    return root, cfg, guarded
+
+
+def _resolve_data_dir(cfg: dict, project_root: str) -> str:
+    """Expand ``data_dir`` to an absolute, symlink-resolved path.
+
+    ``{slug}`` becomes the dashed project path and ``~`` is expanded; a relative
+    value resolves against the project root. The result is canonicalized with
+    ``realpath`` so a session reached through a symlinked storage path still
+    writes to one identity. The project *slug* itself is deliberately not
+    realpath'd (see ``_slugify``) — only the final storage path is.
+    """
+    data_dir = os.path.expanduser(cfg["data_dir"].replace("{slug}", _slugify(project_root)))
+    if not os.path.isabs(data_dir):
+        data_dir = os.path.join(project_root, data_dir)
+    return os.path.realpath(data_dir)
+
+
+def _within(parent: str, child: str) -> bool:
+    """True if ``child`` is ``parent`` or nested under it. Both should already
+    be absolute/realpath'd. False across Windows drives."""
+    try:
+        return os.path.commonpath([parent, child]) == parent
+    except ValueError:
+        return False
+
+
+def safe_data_dir(cfg: dict, project_root: str, guarded: set) -> str:
+    """Resolve the memory directory, refusing an untrusted redirect.
+
+    When the *project* layer set ``data_dir`` and the resolved path escapes both
+    the project root and ``~/.ostinote``, it is treated as a cloned-repo attempt
+    to redirect writes (or to widen the Codex sandbox via the installer) and the
+    built-in default layout is used instead. A ``data_dir`` from the trusted
+    user layer is honored wherever it points.
+    """
+    resolved = _resolve_data_dir(cfg, project_root)
+    if ("data_dir",) in guarded:
+        safe_roots = (
+            os.path.realpath(project_root),
+            os.path.realpath(os.path.expanduser("~/.ostinote")),
+        )
+        if not any(_within(root, resolved) for root in safe_roots):
+            return _resolve_data_dir(config_mod.DEFAULTS, project_root)
+    return resolved
+
+
+def data_dir_for(cwd: str) -> str:
+    """Compute a project's validated memory directory without building an Env.
+
+    Mirrors ``Env``'s root resolution and containment check so the Codex
+    installer grants sandbox access to exactly the directory ``Env`` will write
+    to — never an attacker-redirected one — without paying for tz/logging setup.
+    """
+    root, cfg, guarded = _resolve_root_config(cwd)
+    return safe_data_dir(cfg, root, guarded)
+
+
 class Env:
     def __init__(self, cwd: str):
         self.cwd = os.path.abspath(cwd)
-        root = _git_main_root(self.cwd)
-        cfg = config_mod.load(root)
-        if not cfg["share_worktrees"]:
-            root = self.cwd
-            cfg = config_mod.load(root)
+        root, cfg, guarded = _resolve_root_config(self.cwd)
         self.project_root = root
         self.cfg = cfg
         self.tz = tzutil.get_tz(cfg["timezone"])
-
-        # "{slug}" lets a single user-level setting keep every project's
-        # memory outside its repo, e.g. "~/.ostinote/projects/{slug}".
-        data_dir = os.path.expanduser(cfg["data_dir"].replace("{slug}", _slugify(root)))
-        if not os.path.isabs(data_dir):
-            data_dir = os.path.join(root, data_dir)
-        self.data_dir = data_dir
+        self.data_dir = safe_data_dir(cfg, root, guarded)
 
     # --- layout -------------------------------------------------------------
 
@@ -117,11 +185,9 @@ class Env:
             os.makedirs(d, exist_ok=True)
         gitignore = os.path.join(self.data_dir, ".gitignore")
         if not os.path.exists(gitignore):
-            try:
+            with contextlib.suppress(OSError):
                 with open(gitignore, "w", encoding="utf-8") as f:
                     f.write("*\n")
-            except OSError:
-                pass
 
     # --- time ----------------------------------------------------------------
 
@@ -138,11 +204,9 @@ class Env:
         ts = tzutil.now(self.tz).strftime("%H:%M:%S")
         line = "%s [%s] %s\n" % (ts, component, message)
         path = os.path.join(self.logs_dir, "memory-%s.log" % self.today())
-        try:
+        with contextlib.suppress(OSError):
             with open(path, "a", encoding="utf-8") as f:
                 f.write(line)
-        except OSError:
-            pass
 
     def log_tokens(self, component: str, tk_in: int, tk_out: int, tk_cache: int, cost: float) -> None:
         detail = "tokens: %d+%dcache→%dout" % (tk_in, tk_cache, tk_out)

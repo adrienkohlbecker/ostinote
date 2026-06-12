@@ -163,18 +163,15 @@ def test_data_dir_slug_placeholder(tmp_path, monkeypatch):
     """
     from ostinote.env import Env
 
-    monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", str(tmp_path / "no-user-config.json"))
     proj = tmp_path / "proj"
     (proj / ".ostinote").mkdir(parents=True)
     store = tmp_path / "store"
-    (proj / ".ostinote" / "config.json").write_text(
-        json.dumps(
-            {
-                "data_dir": str(store / "{slug}"),
-                "share_worktrees": False,
-            }
-        )
-    )
+    # data_dir is honored only from the trusted user layer; a project-layer
+    # value pointing outside the repo would be rejected as an untrusted redirect.
+    user_cfg = tmp_path / "user-config.json"
+    user_cfg.write_text(json.dumps({"data_dir": str(store / "{slug}")}))
+    monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", str(user_cfg))
+    (proj / ".ostinote" / "config.json").write_text(json.dumps({"share_worktrees": False}))
     env = Env(str(proj))
     import re
 
@@ -217,6 +214,106 @@ def test_config_legacy_remember_keys(tmp_path, monkeypatch):
     )
     cfg = config_mod.load(str(proj))
     assert cfg["cooldowns"]["compress_seconds"] == 7200
+
+
+def test_project_config_cannot_set_summarizer_command(tmp_path, monkeypatch):
+    """Ignore an untrusted project config that tries to set the summarizer.
+
+    Expected: a cloned repo's `.ostinote/config.json` cannot inject
+    `summarizer.command` (which runs as a subprocess on every save); the loaded
+    value falls back to the default while a user-layer command is honored.
+    """
+    monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", str(tmp_path / "user.json"))
+    (tmp_path / "user.json").write_text(json.dumps({"summarizer": {"command": ["trusted-engine"]}}))
+    proj = tmp_path / "proj"
+    (proj / ".ostinote").mkdir(parents=True)
+    (proj / ".ostinote" / "config.json").write_text(
+        json.dumps({"summarizer": {"command": ["rm", "-rf", "/"], "timeout": 1}})
+    )
+
+    cfg, guarded = config_mod.load_trusted(str(proj))
+    # The malicious project command is dropped; the trusted user command wins,
+    # and a sibling key the project set (timeout) still merges normally.
+    assert cfg["summarizer"]["command"] == ["trusted-engine"]
+    assert cfg["summarizer"]["timeout"] == 1
+    assert ("data_dir",) not in guarded
+
+
+def test_project_config_data_dir_is_flagged_guarded(tmp_path, monkeypatch):
+    """Report when the project layer sets the guarded `data_dir` key.
+
+    Expected: `load_trusted` keeps the value (the in-repo `.ostinote` workflow
+    needs it) but flags it so `Env` can containment-check it; an unset key is
+    not flagged.
+    """
+    monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", str(tmp_path / "user.json"))
+    proj = tmp_path / "proj"
+    (proj / ".ostinote").mkdir(parents=True)
+    (proj / ".ostinote" / "config.json").write_text(json.dumps({"data_dir": ".ostinote"}))
+
+    cfg, guarded = config_mod.load_trusted(str(proj))
+    assert cfg["data_dir"] == ".ostinote"
+    assert ("data_dir",) in guarded
+
+
+def test_env_rejects_project_data_dir_escaping_repo(tmp_path, monkeypatch):
+    """Refuse a project-supplied data_dir that escapes the repo and home.
+
+    Expected: a cloned repo pointing data_dir outside both the project root and
+    ~/.ostinote (an arbitrary-write / Codex-sandbox-escape attempt) is ignored,
+    and Env falls back to the default `~/.ostinote/projects/<slug>` layout.
+    """
+    from ostinote.env import Env, _slugify
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", str(tmp_path / "no-user.json"))
+    proj = tmp_path / "proj"
+    (proj / ".ostinote").mkdir(parents=True)
+    escape = tmp_path / "evil"
+    (proj / ".ostinote" / "config.json").write_text(json.dumps({"data_dir": str(escape), "share_worktrees": False}))
+
+    env = Env(str(proj))
+    expected = os.path.realpath(os.path.expanduser("~/.ostinote/projects/%s" % _slugify(str(proj))))
+    assert env.data_dir == expected
+    assert str(escape) not in env.data_dir
+
+
+def test_env_allows_project_data_dir_inside_repo(tmp_path, monkeypatch):
+    """Honor an in-repo project data_dir, the documented `.ostinote` workflow.
+
+    Expected: a relative `.ostinote` data_dir resolves under the project root
+    and is kept, because it does not escape the repo.
+    """
+    from ostinote.env import Env
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", str(tmp_path / "no-user.json"))
+    proj = tmp_path / "proj"
+    (proj / ".ostinote").mkdir(parents=True)
+    (proj / ".ostinote" / "config.json").write_text(json.dumps({"data_dir": ".ostinote", "share_worktrees": False}))
+
+    env = Env(str(proj))
+    assert env.data_dir == os.path.realpath(str(proj / ".ostinote"))
+
+
+def test_env_trusts_user_data_dir_anywhere(tmp_path, monkeypatch):
+    """Let the trusted user layer place memory wherever it likes.
+
+    Expected: a user-config data_dir outside the repo and ~/.ostinote is used
+    as-is — the containment check only applies to the untrusted project layer.
+    """
+    from ostinote.env import Env
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    user_cfg = tmp_path / "user.json"
+    user_cfg.write_text(json.dumps({"data_dir": str(tmp_path / "elsewhere")}))
+    monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", str(user_cfg))
+    proj = tmp_path / "proj"
+    (proj / ".ostinote").mkdir(parents=True)
+    (proj / ".ostinote" / "config.json").write_text(json.dumps({"share_worktrees": False}))
+
+    env = Env(str(proj))
+    assert env.data_dir == os.path.realpath(str(tmp_path / "elsewhere"))
 
 
 def test_costs_day_totals(tmp_path):

@@ -12,11 +12,15 @@ def codex_item(payload):
 
 
 def project_env(tmp_path, monkeypatch, extra_cfg=None):
-    monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", str(tmp_path / "no-user-config.json"))
+    # data_dir is a guarded key: a project-layer value outside the repo /
+    # ~/.ostinote is rejected as an untrusted redirect, so tests supply it via
+    # the trusted user layer (the monkeypatched USER_CONFIG_PATH).
+    user_cfg = tmp_path / "user-config.json"
+    user_cfg.write_text(json.dumps({"data_dir": str(tmp_path / "data")}), encoding="utf-8")
+    monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", str(user_cfg))
     proj = tmp_path / "proj"
     (proj / ".ostinote").mkdir(parents=True)
     cfg = {
-        "data_dir": str(tmp_path / "data"),
         "share_worktrees": False,
         "cooldowns": {"save_seconds": 0, "compress_seconds": 0},
         "thresholds": {"min_human_messages": 1, "delta_lines_trigger": 1},
@@ -87,16 +91,27 @@ def functional_cli_project(tmp_path, extra_cfg=None):
         encoding="utf-8",
     )
     cfg = {
-        "data_dir": str(tmp_path / "data"),
         "share_worktrees": False,
         "cooldowns": {"save_seconds": 0, "compress_seconds": 0},
         "thresholds": {"min_human_messages": 1, "delta_lines_trigger": 1},
         "features": {"hourly_compression": False, "consolidation": True, "recovery": False},
-        "summarizer": {"command": [sys.executable, str(model)], "timeout": 5},
     }
     if extra_cfg:
         deep_update(cfg, extra_cfg)
     (proj / ".ostinote" / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
+
+    # data_dir and summarizer.command are guarded keys honored only from the
+    # trusted user layer; the subprocess resolves "~" to this temp HOME.
+    (home / ".ostinote").mkdir()
+    (home / ".ostinote" / "config.json").write_text(
+        json.dumps(
+            {
+                "data_dir": str(tmp_path / "data"),
+                "summarizer": {"command": [sys.executable, str(model)], "timeout": 5},
+            }
+        ),
+        encoding="utf-8",
+    )
 
     env = os.environ.copy()
     env["HOME"] = str(home)
