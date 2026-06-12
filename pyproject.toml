@@ -2,8 +2,31 @@
 name = "ostinote"
 version = "1.0.0"
 description = "Continuous memory for coding agents — Claude Code and Codex CLI, one shared memory"
+readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE.md"]
+authors = [
+    { name = "Adrien Kohlbecker", email = "adrien.kohlbecker@gmail.com" },
+]
+keywords = ["claude-code", "codex", "coding-agents", "memory", "llm", "hooks"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development",
+]
+
+[project.urls]
+Homepage = "https://github.com/adrienkohlbecker/ostinote"
+Repository = "https://github.com/adrienkohlbecker/ostinote"
+Issues = "https://github.com/adrienkohlbecker/ostinote/issues"
 
 [project.scripts]
 ostinote = "ostinote.cli:main"
@@ -12,7 +35,8 @@ ostinote = "ostinote.cli:main"
 dev = ["pytest", "ruff"]
 
 [build-system]
-requires = ["setuptools>=68"]
+# >=77 needed for PEP 639 SPDX license expression / license-files
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
