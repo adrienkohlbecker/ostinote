@@ -46,6 +46,28 @@ def test_parse_skips_malformed_lines(tmp_path, capsys):
     assert "skipped 1 malformed transcript line(s)" in capsys.readouterr().err
 
 
+def test_parse_skips_non_dict_json_lines(tmp_path, capsys):
+    """Treat valid-JSON lines that are not objects as malformed.
+
+    Expected: a bare string or list line is counted as malformed instead of
+    reaching the extractor (which indexes into a dict), and surrounding
+    messages still parse.
+    """
+    from tests.conftest import claude_line
+
+    path = tmp_path / "session.jsonl"
+    path.write_text(
+        claude_line("user", "hello") + "\n" + '"just a string"\n' + "[1, 2]\n",
+        encoding="utf-8",
+    )
+
+    messages, total = ClaudeAgent().parse(str(path))
+
+    assert total == 3
+    assert messages == [("HUMAN", "hello")]
+    assert "skipped 2 malformed transcript line(s)" in capsys.readouterr().err
+
+
 def test_claude_parse_incremental(claude_transcript):
     """Resume Claude parsing from a saved line offset.
 

@@ -48,6 +48,11 @@ class Agent:
                 except json.JSONDecodeError:
                     malformed += 1
                     continue
+                # Extractors index into the object; a valid-JSON line that
+                # isn't an object (bare string, list) is malformed for us.
+                if not isinstance(obj, dict):
+                    malformed += 1
+                    continue
                 messages.extend(self._extract_messages(obj))
 
         if malformed:
