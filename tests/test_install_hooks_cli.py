@@ -341,7 +341,8 @@ def test_malformed_hook_input_is_logged(tmp_path, monkeypatch):
 def test_cli_dispatches_save_and_consolidate(tmp_path, monkeypatch):
     """Check argparse wiring for the `save` and `consolidate` commands.
 
-    Expected: CLI arguments are passed to the correct pipeline functions, and
+    Expected: CLI arguments are passed to the correct pipeline functions, the
+    transcript path is canonicalized like the hook ingestion path does, and
     `main()` returns the pipeline exit codes instead of swallowing them.
     """
     from ostinote import cli as cli_mod
@@ -354,6 +355,7 @@ def test_cli_dispatches_save_and_consolidate(tmp_path, monkeypatch):
             calls.append(("save", env.cwd, agent, session, transcript, force, dry, final)) or 7
         ),
     )
+    transcript = str(tmp_path / "t.jsonl")
     code = cli_mod.main(
         [
             "save",
@@ -362,7 +364,7 @@ def test_cli_dispatches_save_and_consolidate(tmp_path, monkeypatch):
             "--session",
             "s1",
             "--transcript",
-            "t.jsonl",
+            transcript,
             "--cwd",
             str(tmp_path),
             "--force",
@@ -370,7 +372,7 @@ def test_cli_dispatches_save_and_consolidate(tmp_path, monkeypatch):
         ]
     )
     assert code == 7
-    assert calls == [("save", str(tmp_path), "codex", "s1", "t.jsonl", True, True, False)]
+    assert calls == [("save", str(tmp_path), "codex", "s1", os.path.realpath(transcript), True, True, False)]
 
     monkeypatch.setattr(
         cli_mod.pipeline,
@@ -379,6 +381,21 @@ def test_cli_dispatches_save_and_consolidate(tmp_path, monkeypatch):
     )
     assert cli_mod.main(["consolidate", "--cwd", str(tmp_path)]) == 3
     assert calls[-1] == ("consolidate", str(tmp_path))
+
+
+def test_cli_save_force_and_final_are_mutually_exclusive(tmp_path):
+    """Reject `save --force --final` instead of silently letting --force win.
+
+    Expected: the flags express conflicting gates (--force also bypasses the
+    min-message threshold), so argparse refuses the combination with its usual
+    exit code 2.
+    """
+    from ostinote import cli as cli_mod
+
+    with pytest.raises(SystemExit) as exc:
+        cli_mod.main(["save", "--force", "--final", "--cwd", str(tmp_path)])
+
+    assert exc.value.code == 2
 
 
 def test_cli_hook_failures_are_logged_and_swallowed(tmp_path, monkeypatch):

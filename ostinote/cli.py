@@ -88,8 +88,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p_save.add_argument("--session", default=None)
     p_save.add_argument("--transcript", default=None)
     _add_cwd(p_save)
-    p_save.add_argument("--force", action="store_true", help="bypass cooldown and min-message threshold")
-    p_save.add_argument(
+    mode = p_save.add_mutually_exclusive_group()
+    mode.add_argument("--force", action="store_true", help="bypass cooldown and min-message threshold")
+    mode.add_argument(
         "--final",
         action="store_true",
         help="end-of-session save: bypass cooldown, keep min-message threshold",
@@ -195,7 +196,11 @@ def _log_hook_failure(argv: list[str]) -> None:
 
 
 def _cmd_save(args) -> int:
-    return pipeline.run_save(_env(args), args.agent, args.session, args.transcript, args.force, args.dry, args.final)
+    # Canonicalize the transcript to match the hook ingestion path. The cwd is
+    # deliberately left literal: project slugs derive from it, and resolving
+    # symlinks would orphan existing memory dirs.
+    transcript = os.path.realpath(args.transcript) if args.transcript else None
+    return pipeline.run_save(_env(args), args.agent, args.session, transcript, args.force, args.dry, args.final)
 
 
 def _cmd_consolidate(args) -> int:
