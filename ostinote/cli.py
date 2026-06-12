@@ -25,6 +25,7 @@ are logged to ``HOOK_ERRORS_PATH`` instead of surfacing.
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 import os
 import sys
 import time
@@ -76,6 +77,13 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Continuous memory for coding agents (Claude Code, Codex).",
         **extra,
     )
+    # The installed distribution is the single source of the version; falls
+    # back gracefully when running from a raw checkout without installation.
+    try:
+        version = importlib.metadata.version("ostinote")
+    except importlib.metadata.PackageNotFoundError:
+        version = "unknown (not installed)"
+    parser.add_argument("--version", action="version", version="%(prog)s " + version)
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_hook = sub.add_parser("hook", help="lifecycle hook entry points")

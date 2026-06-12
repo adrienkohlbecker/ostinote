@@ -50,6 +50,22 @@ def test_cli_dispatches_save_and_consolidate(tmp_path, monkeypatch):
     assert calls[-1] == ("consolidate", str(tmp_path))
 
 
+def test_cli_version_prints_distribution_version(capsys):
+    """Check that `--version` reports the installed distribution's version.
+
+    Expected: argparse's version action prints `ostinote <version>` (sourced
+    from package metadata, not a hardcoded string) and exits 0 — bug reports
+    ask for this output, so it must work without any subcommand.
+    """
+    import importlib.metadata
+
+    with pytest.raises(SystemExit) as exc:
+        cli_mod.main(["--version"])
+    assert exc.value.code == 0
+    expected = importlib.metadata.version("ostinote")
+    assert capsys.readouterr().out.strip() == "ostinote %s" % expected
+
+
 def test_cli_save_force_and_final_are_mutually_exclusive(tmp_path):
     """Reject `save --force --final` instead of silently letting --force win.
 

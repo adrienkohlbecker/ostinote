@@ -41,6 +41,6 @@ body:
     id: version
     attributes:
       label: Versions
-      placeholder: "ostinote commit, OS, Python, claude CLI version"
+      placeholder: "`ostinote --version` output, OS, Python, claude CLI version"
     validations:
       required: true
