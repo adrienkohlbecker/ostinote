@@ -9,13 +9,13 @@ The repo uses [mise](https://mise.jdx.dev) to pin Python and uv and to expose ta
 ```bash
 git clone https://github.com/adrienkohlbecker/ostinote && cd ostinote
 mise install        # Python + uv, creates .venv
-mise run setup      # editable install with dev deps
+mise run setup      # locked editable install with dev deps (uv sync)
 mise run test       # pytest suite
 mise run lint       # ruff check + format check (same as CI)
 mise run fix        # auto-fix lint findings and reformat
 ```
 
-Without mise: any Python 3.11+, `pip install -e '.[dev]'`, then `pytest`, `ruff check .`, `ruff format .`.
+Without mise: any Python 3.11+, `pip install -e . --group dev` (pip ≥ 25.1), then `pytest`, `ruff check .`, `ruff format .`. Note that CI installs the exact versions in `uv.lock`; if a lint or format check disagrees with CI, that's the first thing to look at.
 
 Useful while hacking:
 

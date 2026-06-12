@@ -29,7 +29,8 @@ Changelog = "https://github.com/adrienkohlbecker/ostinote/releases"
 [project.scripts]
 ostinote = "ostinote.cli:main"
 
-[project.optional-dependencies]
+# PEP 735 dependency group: repo-local dev tooling, not published as an extra
+[dependency-groups]
 dev = ["pytest", "pytest-timeout", "ruff"]
 
 [build-system]

@@ -23,8 +23,8 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.14"
-      - run: uv run --locked --extra dev ruff check --output-format=github .
-      - run: uv run --locked --extra dev ruff format --check .
+      - run: uv run --locked --group dev ruff check --output-format=github .
+      - run: uv run --locked --group dev ruff format --check .
 
   test:
     name: test (${{ matrix.os }}, py${{ matrix.python }})
@@ -43,4 +43,4 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: ${{ matrix.python }}
-      - run: uv run --locked --extra dev pytest -q --durations=10
+      - run: uv run --locked --group dev pytest -q --durations=10
