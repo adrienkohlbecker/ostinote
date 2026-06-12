@@ -69,7 +69,7 @@ def test_cli_consolidate_functional_with_fake_summarizer(tmp_path):
     env["OSTINOTE_FAKE_RESULT"] = (
         "===RECENT===\n# Recent\n\nfunctional recent\n"
         "===ARCHIVE===\n# Archive\n\nfunctional archive\n"
-        "===CORE===\n- functional core"
+        "===CORE===\n- 2026-06-12: functional core"
     )
     data.mkdir()
     staging = data / "today-2000-01-01.md"
@@ -82,7 +82,7 @@ def test_cli_consolidate_functional_with_fake_summarizer(tmp_path):
     assert result.returncode == 0, result.stderr
     assert (data / "recent.md").read_text(encoding="utf-8") == "# Recent\n\nfunctional recent\n"
     assert (data / "archive.md").read_text(encoding="utf-8") == "# Archive\n\nfunctional archive\n"
-    assert "- functional core" in (data / "core-memories.md").read_text(encoding="utf-8")
+    assert "- 2026-06-12: functional core" in (data / "core-memories.md").read_text(encoding="utf-8")
     assert not staging.exists()
     assert (data / "today-2000-01-01.done.md").exists()
     assert "old daily memory" in prompt_log.read_text(encoding="utf-8")

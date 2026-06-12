@@ -128,15 +128,35 @@ def test_append_core(tmp_path):
     """Append promoted core-memory lines to the persistent core file.
 
     Expected: the first append creates the `# Core Memories` heading, later
-    appends preserve the existing content and add one line per promoted fact.
+    appends preserve the existing content and add one line per promoted fact,
+    and the appended lines are returned for logging.
     """
     from ostinote.pipeline import _append_core
 
     path = str(tmp_path / "core-memories.md")
-    _append_core(path, "- 2026-06-10: a")
-    _append_core(path, "- 2026-06-11: b")
+    assert _append_core(path, "- 2026-06-10: a") == ["- 2026-06-10: a"]
+    assert _append_core(path, "- 2026-06-11: b") == ["- 2026-06-11: b"]
     with open(path) as f:
         assert f.read() == "# Core Memories\n\n- 2026-06-10: a\n- 2026-06-11: b\n"
+
+
+def test_append_core_filters_malformed_lines(tmp_path):
+    """Keep only `- YYYY-MM-DD: fact` lines when promoting core memories.
+
+    Expected: model commentary, undated bullets, and whitespace-only sections
+    never reach core-memories.md (which is injected verbatim into every future
+    session), and a section with no valid line writes nothing at all.
+    """
+    from ostinote.pipeline import _append_core
+
+    path = str(tmp_path / "core-memories.md")
+    kept = _append_core(path, "Here are the memories:\n- 2026-06-12: real fact\n- undated noise\n")
+    assert kept == ["- 2026-06-12: real fact"]
+    with open(path) as f:
+        assert f.read() == "# Core Memories\n\n- 2026-06-12: real fact\n"
+
+    assert _append_core(str(tmp_path / "other.md"), "   \n") == []
+    assert not (tmp_path / "other.md").exists()
 
 
 def test_parse_consolidation_strips_fences():

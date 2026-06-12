@@ -279,12 +279,22 @@ def run_consolidation(env: Env) -> int:
             env.log("consolidation", "ERROR: empty recent section, aborting")
             return 1
 
+        # Consolidation rewrites long-term memory wholesale from model output,
+        # so keep a one-deep .bak of each file it replaces; a bad run can be
+        # undone by hand (staging inputs survive as .done.md as well).
+        _backup(env.recent_file)
         _write(env.recent_file, new_recent + "\n")
         if new_archive:
+            _backup(env.archive_file)
             _write(env.archive_file, new_archive + "\n")
+        elif archive.strip():
+            env.log("consolidation", "WARNING: reply had no archive section; archive.md left unchanged")
         if new_core:
-            _append_core(env.core_memories_file, new_core)
-            env.log("consolidation", "core memories promoted: %s" % new_core.splitlines()[0])
+            promoted = _append_core(env.core_memories_file, new_core)
+            if promoted:
+                env.log("consolidation", "core memories promoted: %s" % promoted[0])
+            else:
+                env.log("consolidation", "WARNING: core section had no valid '- YYYY-MM-DD:' lines, skipped")
         env.log_tokens(
             "consolidation",
             result.tokens.input,
@@ -324,14 +334,28 @@ def parse_consolidation_response(text: str):
     return recent, archive, core
 
 
-def _append_core(path: str, new_core: str) -> None:
+_CORE_LINE_RE = re.compile(r"^- \d{4}-\d{2}-\d{2}: \S")
+
+
+def _append_core(path: str, new_core: str) -> list[str]:
+    """Append promoted core-memory lines, keeping only well-formed ones.
+
+    core-memories.md is injected verbatim into every future session, so only
+    lines matching the `- YYYY-MM-DD: fact` contract are appended; whitespace
+    and free-form model commentary are dropped. Returns the appended lines so
+    the caller can log what was actually promoted.
+    """
+    lines = [ln.strip() for ln in new_core.splitlines() if _CORE_LINE_RE.match(ln.strip())]
+    if not lines:
+        return []
     existing = _read_or_empty(path)
     with open(path, "a", encoding="utf-8") as f:
         if not existing.strip():
             f.write("# Core Memories\n\n")
         elif not existing.endswith("\n"):
             f.write("\n")
-        f.write(new_core + "\n")
+        f.write("\n".join(lines) + "\n")
+    return lines
 
 
 def _strip_fences(text: str) -> str:
@@ -354,3 +378,10 @@ def _write(path: str, content: str) -> None:
     with open(tmp, "w", encoding="utf-8") as f:
         f.write(content)
     os.replace(tmp, path)
+
+
+def _backup(path: str) -> None:
+    """Copy ``path`` to ``path.bak`` (one generation) before it is replaced."""
+    content = _read_or_empty(path)
+    if content:
+        _write(path + ".bak", content)

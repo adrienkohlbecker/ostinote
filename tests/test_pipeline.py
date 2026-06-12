@@ -146,7 +146,8 @@ def test_run_consolidation_writes_sections_and_marks_staging_done(tmp_path, monk
         seen["prompt"] = prompt
         seen["timeout"] = cfg["summarizer"]["timeout"]
         return model_result(
-            "===RECENT===\n# Recent\n\nnew recent\n===ARCHIVE===\n# Archive\n\nnew archive\n===CORE===\n- stable fact"
+            "===RECENT===\n# Recent\n\nnew recent\n===ARCHIVE===\n# Archive\n\nnew archive\n"
+            "===CORE===\n- 2026-06-12: stable fact"
         )
 
     monkeypatch.setattr(pipeline_mod.summarize, "call_model", fake_call_model)
@@ -157,9 +158,12 @@ def test_run_consolidation_writes_sections_and_marks_staging_done(tmp_path, monk
     assert seen["timeout"] >= 180
     assert (tmp_path / "data" / "recent.md").read_text(encoding="utf-8") == "# Recent\n\nnew recent\n"
     assert (tmp_path / "data" / "archive.md").read_text(encoding="utf-8") == "# Archive\n\nnew archive\n"
-    assert "- stable fact" in (tmp_path / "data" / "core-memories.md").read_text(encoding="utf-8")
+    assert "- 2026-06-12: stable fact" in (tmp_path / "data" / "core-memories.md").read_text(encoding="utf-8")
     assert not staging.exists()
     assert (tmp_path / "data" / "today-2000-01-01.done.md").exists()
+    # The pre-consolidation contents survive as one-deep .bak copies.
+    assert (tmp_path / "data" / "recent.md.bak").read_text(encoding="utf-8") == "# Recent\n\nold recent"
+    assert (tmp_path / "data" / "archive.md.bak").read_text(encoding="utf-8") == "# Archive\n\nold archive"
 
 
 def test_run_save_rejects_malformed_header(tmp_path, monkeypatch):
