@@ -8,6 +8,20 @@ from ostinote import hooks as hooks_mod
 from ostinote.state import SessionState
 from tests.helpers import age_file, hook_stdin
 
+
+@pytest.fixture
+def spawned(monkeypatch):
+    """Record background work requests instead of launching subprocesses.
+
+    Hooks must enqueue saves/consolidation via ``spawn``, never run them
+    inline; every hook test intercepts spawn the same way, so the recorder is
+    a fixture and the returned list of argv lists is the assertion surface.
+    """
+    requests = []
+    monkeypatch.setattr(hooks_mod, "spawn", lambda _env, args: requests.append(args))
+    return requests
+
+
 # --- SessionStart ----------------------------------------------------------------------
 
 
@@ -40,7 +54,7 @@ def test_session_start_source_filter(tmp_path, monkeypatch, make_project_env, ca
 
 
 def test_session_start_queues_consolidation_without_injecting_on_resume(
-    tmp_path, monkeypatch, make_project_env, capsys
+    tmp_path, monkeypatch, make_project_env, capsys, spawned
 ):
     """Start consolidation on resume without re-injecting memory context.
 
@@ -50,15 +64,11 @@ def test_session_start_queues_consolidation_without_injecting_on_resume(
     env = make_project_env({"features": {"recovery": False}})
     env.ensure_dirs()
     (tmp_path / "data" / "today-2000-01-01.md").write_text("old", encoding="utf-8")
-    queued = []
-    # Capture the consolidation request while still letting `session_start`
-    # decide whether memory should be printed for this source.
-    monkeypatch.setattr(hooks_mod, "spawn", lambda _env, args: queued.append(args))
     hook_stdin(monkeypatch, {"cwd": env.cwd, "source": "resume"})
 
     hooks_mod.session_start("codex")
 
-    assert queued == [["consolidate", "--cwd", env.cwd]]
+    assert spawned == [["consolidate", "--cwd", env.cwd]]
     assert capsys.readouterr().out == ""
 
 
@@ -85,7 +95,7 @@ def test_session_start_truncates_oversized_memory(tmp_path, monkeypatch, make_pr
 # --- PostToolUse -----------------------------------------------------------------------
 
 
-def test_post_tool_registers_session_and_queues_save(tmp_path, monkeypatch, make_project_env):
+def test_post_tool_registers_session_and_queues_save(tmp_path, monkeypatch, make_project_env, spawned):
     """Queue a background save after enough new transcript lines appear.
 
     Expected: `post_tool` records the transcript path for recovery and queues
@@ -95,16 +105,13 @@ def test_post_tool_registers_session_and_queues_save(tmp_path, monkeypatch, make
     env = make_project_env()
     transcript = tmp_path / "session.jsonl"
     transcript.write_text("{}\n{}\n{}\n", encoding="utf-8")
-    queued = []
-    # Hooks should enqueue background work, not run summarization synchronously.
-    monkeypatch.setattr(hooks_mod, "spawn", lambda _env, args: queued.append(args))
     hook_stdin(monkeypatch, {"cwd": env.cwd, "transcript_path": str(transcript), "session_id": "s1"})
 
     hooks_mod.post_tool("codex")
 
     state = SessionState.load(env.sessions_dir, "codex", "s1")
     assert state.transcript_path == str(transcript)
-    assert queued == [
+    assert spawned == [
         [
             "save",
             "--agent",
@@ -119,7 +126,7 @@ def test_post_tool_registers_session_and_queues_save(tmp_path, monkeypatch, make
     ]
 
 
-def test_post_tool_skips_small_delta(tmp_path, monkeypatch, make_project_env):
+def test_post_tool_skips_small_delta(tmp_path, monkeypatch, make_project_env, spawned):
     """Queue nothing when too few new transcript lines have accumulated.
 
     Expected: with the delta at or below `delta_lines_trigger`, `post_tool`
@@ -129,17 +136,15 @@ def test_post_tool_skips_small_delta(tmp_path, monkeypatch, make_project_env):
     env = make_project_env({"thresholds": {"delta_lines_trigger": 10}})
     transcript = tmp_path / "session.jsonl"
     transcript.write_text("{}\n{}\n{}\n", encoding="utf-8")
-    queued = []
-    monkeypatch.setattr(hooks_mod, "spawn", lambda _env, args: queued.append(args))
     hook_stdin(monkeypatch, {"cwd": env.cwd, "transcript_path": str(transcript), "session_id": "s1"})
 
     hooks_mod.post_tool("codex")
 
     assert SessionState.load(env.sessions_dir, "codex", "s1").transcript_path == str(transcript)
-    assert queued == []
+    assert spawned == []
 
 
-def test_post_tool_skips_under_cooldown(tmp_path, monkeypatch, make_project_env):
+def test_post_tool_skips_under_cooldown(tmp_path, monkeypatch, make_project_env, spawned):
     """Queue nothing while the per-session save cooldown is still running.
 
     Expected: even with enough new lines, a recent `last_attempt_ts` makes
@@ -154,16 +159,14 @@ def test_post_tool_skips_under_cooldown(tmp_path, monkeypatch, make_project_env)
     state.transcript_path = str(transcript)
     state.last_attempt_ts = time.time()
     state.save()
-    queued = []
-    monkeypatch.setattr(hooks_mod, "spawn", lambda _env, args: queued.append(args))
     hook_stdin(monkeypatch, {"cwd": env.cwd, "transcript_path": str(transcript), "session_id": "s1"})
 
     hooks_mod.post_tool("codex")
 
-    assert queued == []
+    assert spawned == []
 
 
-def test_hooks_canonicalize_transcript_path(tmp_path, monkeypatch, make_project_env):
+def test_hooks_canonicalize_transcript_path(tmp_path, monkeypatch, make_project_env, spawned):
     """Resolve dot-dot segments before paths reach state or subprocesses.
 
     Expected: `post_tool` stores and queues the canonical transcript path, so
@@ -175,8 +178,6 @@ def test_hooks_canonicalize_transcript_path(tmp_path, monkeypatch, make_project_
     transcript.write_text("{}\n{}\n{}\n", encoding="utf-8")
     (tmp_path / "sub").mkdir()
     indirect = str(tmp_path / "sub" / ".." / "session.jsonl")
-    queued = []
-    monkeypatch.setattr(hooks_mod, "spawn", lambda _env, args: queued.append(args))
     hook_stdin(monkeypatch, {"cwd": env.cwd, "transcript_path": indirect, "session_id": "s1"})
 
     hooks_mod.post_tool("codex")
@@ -184,7 +185,7 @@ def test_hooks_canonicalize_transcript_path(tmp_path, monkeypatch, make_project_
     canonical = os.path.realpath(str(transcript))
     state = SessionState.load(env.sessions_dir, "codex", "s1")
     assert state.transcript_path == canonical
-    assert queued and queued[0][queued[0].index("--transcript") + 1] == canonical
+    assert spawned and spawned[0][spawned[0].index("--transcript") + 1] == canonical
 
 
 def test_malformed_hook_input_is_logged(tmp_path, monkeypatch, make_project_env):
@@ -201,14 +202,14 @@ def test_malformed_hook_input_is_logged(tmp_path, monkeypatch, make_project_env)
 
     logs = list((tmp_path / "data" / "logs").glob("memory-*.log"))
     assert logs and "unreadable hook input" in logs[0].read_text(encoding="utf-8")
-    assert env.cwd  # env fixture used; no save state should exist
+    # No save state should exist: the malformed payload must stay a no-op.
     assert not os.path.exists(env.sessions_dir) or os.listdir(env.sessions_dir) == []
 
 
 # --- SessionEnd ------------------------------------------------------------------------
 
 
-def test_session_end_queues_final_save_from_transcript_basename(tmp_path, monkeypatch, make_project_env):
+def test_session_end_queues_final_save_from_transcript_basename(tmp_path, monkeypatch, make_project_env, spawned):
     """Queue a final save when the hook payload omits `session_id`.
 
     Expected: `session_end` derives the session id from the transcript filename
@@ -218,14 +219,12 @@ def test_session_end_queues_final_save_from_transcript_basename(tmp_path, monkey
     env = make_project_env()
     transcript = tmp_path / "session-abc.jsonl"
     transcript.write_text("{}\n", encoding="utf-8")
-    queued = []
     # No session id in stdin exercises the filename-derived fallback.
-    monkeypatch.setattr(hooks_mod, "spawn", lambda _env, args: queued.append(args))
     hook_stdin(monkeypatch, {"cwd": env.cwd, "transcript_path": str(transcript)})
 
     hooks_mod.session_end("claude")
 
-    assert queued == [
+    assert spawned == [
         [
             "save",
             "--agent",
@@ -241,7 +240,7 @@ def test_session_end_queues_final_save_from_transcript_basename(tmp_path, monkey
     ]
 
 
-def test_session_end_skips_when_nothing_new(tmp_path, monkeypatch, make_project_env):
+def test_session_end_skips_when_nothing_new(tmp_path, monkeypatch, make_project_env, spawned):
     """Skip the final save when the transcript was already saved to its end.
 
     Expected: with the saved line marker equal to the transcript line count,
@@ -256,13 +255,11 @@ def test_session_end_skips_when_nothing_new(tmp_path, monkeypatch, make_project_
     state.transcript_path = str(transcript)
     state.line = 2
     state.save()
-    queued = []
-    monkeypatch.setattr(hooks_mod, "spawn", lambda _env, args: queued.append(args))
     hook_stdin(monkeypatch, {"cwd": env.cwd, "transcript_path": str(transcript)})
 
     hooks_mod.session_end("claude")
 
-    assert queued == []
+    assert spawned == []
 
 
 # --- Spawn -----------------------------------------------------------------------------
@@ -295,7 +292,14 @@ def test_spawn_creates_owner_only_background_log(tmp_path, monkeypatch, make_pro
     # Stub process creation: a real detached child would be reported by pytest
     # as an unreaped Popen, and the chmod under test happens before Popen runs.
     launched = []
-    monkeypatch.setattr(hooks_mod.subprocess, "Popen", lambda *args, **kwargs: launched.append(args))
+
+    def fake_popen(*args, **_kwargs):
+        launched.append(args)
+        # Process-shaped so a future spawn() reading e.g. proc.pid fails with
+        # a clear assertion, not an AttributeError on None.
+        return types.SimpleNamespace(pid=12345)
+
+    monkeypatch.setattr(hooks_mod.subprocess, "Popen", fake_popen)
 
     hooks_mod.spawn(env, ["save"])
 
@@ -316,7 +320,46 @@ def _recovery_env(tmp_path):
     return types.SimpleNamespace(sessions_dir=str(tmp_path / "sessions"), cwd=str(tmp_path))
 
 
-def test_recovery_uses_saved_line_not_failed_attempt_time(tmp_path, monkeypatch):
+def test_session_start_recovery_queues_forced_save(tmp_path, monkeypatch, make_project_env, spawned, capsys):
+    """Exercise recovery through its real entry point, not just `_recover_missed`.
+
+    Expected: with `features.recovery` enabled (the default config), a
+    registered idle session with unsaved transcript lines makes
+    `session_start` queue a forced background save — and memory is still
+    injected for the fresh session. This pins the wiring in `session_start`;
+    the selection rules are covered by the `_recover_missed` tests below.
+    """
+    env = make_project_env()
+    env.ensure_dirs()
+    (tmp_path / "data" / "recent.md").write_text("# Recent\n\nremembered\n", encoding="utf-8")
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text("{}\n{}\n", encoding="utf-8")
+    age_file(transcript, hooks_mod._RECOVERY_ACTIVE_WINDOW + 1)
+    state = SessionState.load(env.sessions_dir, "codex", "stale")
+    state.transcript_path = str(transcript)
+    state.save()
+    hook_stdin(monkeypatch, {"cwd": env.cwd})
+
+    hooks_mod.session_start("claude")
+
+    assert spawned == [
+        [
+            "save",
+            "--agent",
+            "codex",
+            "--session",
+            "stale",
+            "--transcript",
+            str(transcript),
+            "--cwd",
+            env.cwd,
+            "--force",
+        ]
+    ]
+    assert "remembered" in capsys.readouterr().out
+
+
+def test_recovery_uses_saved_line_not_failed_attempt_time(tmp_path, spawned):
     """Recover missed transcript lines even after a failed save attempt.
 
     Expected: recovery compares transcript line count to the saved line marker,
@@ -334,15 +377,12 @@ def test_recovery_uses_saved_line_not_failed_attempt_time(tmp_path, monkeypatch)
     state.last_attempt_ts = time.time()
     state.save()
 
-    queued = []
-    monkeypatch.setattr(hooks_mod, "spawn", lambda _env, args: queued.append(args))
-
     assert hooks_mod._recover_missed(env) == 1
-    assert queued
-    assert "--force" in queued[0]
+    assert spawned
+    assert "--force" in spawned[0]
 
 
-def test_recovery_skips_fully_saved_transcripts(tmp_path, monkeypatch):
+def test_recovery_skips_fully_saved_transcripts(tmp_path, spawned):
     """Avoid recovery work for transcripts already saved through their end.
 
     Expected: if the saved line marker equals the transcript line count, no
@@ -359,15 +399,11 @@ def test_recovery_skips_fully_saved_transcripts(tmp_path, monkeypatch):
     state.line = 2
     state.save()
 
-    queued = []
-    # Intercept background process creation so the assertion can inspect intent.
-    monkeypatch.setattr(hooks_mod, "spawn", lambda _env, args: queued.append(args))
-
     assert hooks_mod._recover_missed(env) == 0
-    assert queued == []
+    assert spawned == []
 
 
-def test_recovery_skips_active_transcripts(tmp_path, monkeypatch):
+def test_recovery_skips_active_transcripts(tmp_path, spawned):
     """Leave recently-changed transcripts to their own live session's hooks.
 
     Expected: a transcript with unsaved lines but a fresh mtime is presumed to
@@ -383,14 +419,32 @@ def test_recovery_skips_active_transcripts(tmp_path, monkeypatch):
     state.line = 1
     state.save()
 
-    queued = []
-    monkeypatch.setattr(hooks_mod, "spawn", lambda _env, args: queued.append(args))
+    assert hooks_mod._recover_missed(env) == 0
+    assert spawned == []
+
+
+def test_recovery_skips_transcripts_older_than_seven_days(tmp_path, spawned):
+    """Bound recovery to the last week of idle sessions.
+
+    Expected: a transcript with unsaved lines whose mtime is past the 7-day
+    window queues nothing — recovery is a crash-recovery net for recent work,
+    not a paid backfill of arbitrarily stale sessions after a long break.
+    """
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text("{}\n{}\n")
+    age_file(transcript, 7 * 86400 + 1)
+
+    env = _recovery_env(tmp_path)
+    state = SessionState.load(env.sessions_dir, "codex", "session")
+    state.transcript_path = str(transcript)
+    state.line = 1
+    state.save()
 
     assert hooks_mod._recover_missed(env) == 0
-    assert queued == []
+    assert spawned == []
 
 
-def test_recovery_caps_queued_sessions_to_newest(tmp_path, monkeypatch):
+def test_recovery_caps_queued_sessions_to_newest(tmp_path, spawned):
     """Bound recovery cost and prefer the most recent sessions.
 
     Expected: with more recoverable sessions than `_RECOVERY_MAX`, exactly that
@@ -410,9 +464,6 @@ def test_recovery_caps_queued_sessions_to_newest(tmp_path, monkeypatch):
         state.save()
         paths.append(str(transcript))
 
-    queued = []
-    monkeypatch.setattr(hooks_mod, "spawn", lambda _env, args: queued.append(args))
-
     assert hooks_mod._recover_missed(env) == hooks_mod._RECOVERY_MAX == 3
-    recovered = sorted(args[args.index("--transcript") + 1] for args in queued)
+    recovered = sorted(args[args.index("--transcript") + 1] for args in spawned)
     assert recovered == sorted(paths[2:])  # the three newest
