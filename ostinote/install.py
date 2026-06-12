@@ -28,11 +28,14 @@ import shutil
 import subprocess
 import tempfile
 import tomllib
+from importlib.resources import files
 
 from . import env as env_mod
 from .hooks import self_command
 
-ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+# Packaged data files resolved via importlib.resources, not __file__, so the
+# lookup keeps working for zipimport/frozen installs.
+ASSETS_DIR = str(files(__package__).joinpath("assets"))
 
 _EVENTS = {
     "SessionStart": "session-start",
