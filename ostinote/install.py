@@ -461,12 +461,19 @@ def _normalized_root(value: str) -> str:
 
 
 def _home_relative(path: str) -> str:
+    """Rewrite a path under the user's home as a portable ``~/...`` string.
+
+    Always emits forward slashes, also on Windows: the result is written into
+    Codex's config.toml, where a stable separator keeps the entry readable and
+    matchable regardless of which platform wrote it. Paths outside the home
+    directory (or on another Windows drive) are returned unchanged.
+    """
     home = os.path.abspath(os.path.expanduser("~"))
     absolute = os.path.abspath(path)
     try:
         if os.path.commonpath([home, absolute]) == home:
             rel = os.path.relpath(absolute, home)
-            return "~" if rel == "." else os.path.join("~", rel)
+            return "~" if rel == "." else "~/" + rel.replace(os.sep, "/")
     except ValueError:
         pass
     return path
