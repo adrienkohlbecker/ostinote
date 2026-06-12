@@ -23,6 +23,7 @@ class SessionState:
     """Resume position and save timestamps for one (agent, session)."""
 
     def __init__(self, path: str, agent: str, session_id: str):
+        """Build a zeroed state for ``path``; use ``load`` to read what's on disk."""
         self.path = path
         self.agent = agent
         self.session_id = session_id
@@ -33,6 +34,12 @@ class SessionState:
 
     @classmethod
     def load(cls, sessions_dir: str, agent: str, session_id: str) -> SessionState:
+        """Load the state file for (agent, session), or a fresh zeroed state.
+
+        Never raises: a missing or corrupt file yields default values (line 0,
+        empty transcript path), which makes the next save start from the top of
+        the transcript. The stored transcript path is realpath'd defensively.
+        """
         path = os.path.join(sessions_dir, "%s--%s.json" % (_sanitize(agent), _sanitize(session_id)))
         state = cls(path, agent, session_id)
         try:
@@ -50,6 +57,11 @@ class SessionState:
         return state
 
     def save(self) -> None:
+        """Write the state atomically (tmp file + ``os.replace``).
+
+        Concurrent writers of the same session are safe: each pid uses its own
+        tmp file, so the last writer wins without corrupting the JSON.
+        """
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
         # Per-pid tmp name: a hook and a background save may write the same
         # session state concurrently; a shared tmp path makes one of them
@@ -71,6 +83,11 @@ class SessionState:
 
 
 def all_states(sessions_dir: str) -> list[SessionState]:
+    """Return every readable session state under ``sessions_dir``, sorted by filename.
+
+    Unreadable or malformed files are skipped, and a missing directory yields
+    an empty list, so callers (recovery, status) always get a usable list.
+    """
     states = []
     try:
         names = os.listdir(sessions_dir)
@@ -93,10 +110,17 @@ class PidLock:
     """Atomic create-or-fail lock; stale locks (dead pid) are taken over."""
 
     def __init__(self, path: str):
+        """Wrap the lock file at ``path``; nothing is acquired until ``acquire``."""
         self.path = path
         self.held = False
 
     def acquire(self) -> bool:
+        """Try to take the lock without blocking; return whether it was taken.
+
+        Creation is atomic (``O_CREAT | O_EXCL``). If the file already exists
+        but its pid is dead, the stale lock is removed and acquisition retried
+        once; a live holder makes this return False immediately.
+        """
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
         for _ in range(2):
             try:
@@ -125,6 +149,7 @@ class PidLock:
         return True
 
     def release(self) -> None:
+        """Drop the lock if this instance holds it; safe to call repeatedly."""
         if self.held:
             try:
                 os.remove(self.path)
@@ -133,9 +158,11 @@ class PidLock:
             self.held = False
 
     def __enter__(self) -> bool:
+        """Attempt acquisition; the ``with ... as held`` value must be checked."""
         return self.acquire()
 
     def __exit__(self, *exc) -> None:
+        """Release the lock (a no-op when acquisition failed)."""
         self.release()
 
 
@@ -166,6 +193,11 @@ def _pid_alive(pid: int) -> bool:
 
 
 def read_ts(path: str) -> float:
+    """Read a Unix timestamp from a marker file; 0.0 if missing or malformed.
+
+    The 0.0 fallback means "never happened", so time-based cooldowns treat a
+    lost marker as long expired.
+    """
     try:
         with open(path, encoding="utf-8") as f:
             return float(f.read().strip() or "0")
@@ -174,6 +206,7 @@ def read_ts(path: str) -> float:
 
 
 def write_ts(path: str) -> None:
+    """Write the current Unix time to a marker file, creating parent dirs."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         f.write(str(time.time()))

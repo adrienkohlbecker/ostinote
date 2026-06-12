@@ -79,8 +79,11 @@ _PROJECT_GUARDED = (("data_dir",),)
 
 
 def _walk(cfg: dict, path: tuple) -> dict | None:
-    """Return the parent dict holding ``path[-1]``, or None if any ancestor is
-    missing or not a dict. Used to inspect/strip nested keys by path tuple."""
+    """Return the parent dict holding ``path[-1]``.
+
+    Returns None if any ancestor is missing or not a dict. Used to
+    inspect/strip nested keys by path tuple.
+    """
     section = cfg
     for key in path[:-1]:
         section = section.get(key) if isinstance(section, dict) else None
@@ -97,7 +100,7 @@ def _strip_path(cfg: dict, path: tuple) -> None:
 
 
 def _has_path(cfg: dict, path: tuple) -> bool:
-    """True if the nested key at ``path`` is set in ``cfg``."""
+    """Return True if the nested key at ``path`` is set in ``cfg``."""
     parent = _walk(cfg, path)
     return parent is not None and path[-1] in parent
 

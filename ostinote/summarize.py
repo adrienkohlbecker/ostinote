@@ -36,6 +36,8 @@ DEFAULT_COMMAND = [
 
 @dataclass
 class TokenUsage:
+    """Token counts and cost reported by the summarizer engine; all zero when the engine reports none."""
+
     input: int = 0
     output: int = 0
     cache: int = 0
@@ -44,6 +46,8 @@ class TokenUsage:
 
 @dataclass
 class ModelResult:
+    """Parsed summarizer response: the text, its token usage, and whether the model answered SKIP."""
+
     text: str
     tokens: TokenUsage
     is_skip: bool

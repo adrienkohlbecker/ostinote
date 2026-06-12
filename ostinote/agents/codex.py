@@ -39,6 +39,8 @@ SESSIONS_ROOT = os.path.expanduser("~/.codex/sessions")
 
 
 class CodexAgent(Agent):
+    """Adapter for Codex CLI rollout transcripts."""
+
     name = "codex"
 
     def _extract_messages(self, obj: dict) -> list[Message]:
@@ -66,8 +68,11 @@ class CodexAgent(Agent):
         return []
 
     def find_latest_transcript(self, cwd: str) -> str | None:
-        """Scan the last few day-directories for the newest rollout whose
-        session_meta cwd matches."""
+        """Scan the last few day-directories for a matching rollout.
+
+        Returns the newest (by mtime) rollout whose first-line session_meta
+        cwd equals ``cwd``, or None if no session from the last 3 days matches.
+        """
         candidates = []
         for days_back in range(3):
             t = time.localtime(time.time() - days_back * 86400)

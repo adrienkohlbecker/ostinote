@@ -18,6 +18,11 @@ _AGENTS = {
 
 
 def get_agent(name: str) -> Agent:
+    """Return the adapter for ``name``, raising ValueError for unknown agents.
+
+    The error lists known agent names so a typo in config or on the command
+    line is self-explanatory.
+    """
     try:
         return _AGENTS[name]
     except KeyError:
@@ -25,4 +30,5 @@ def get_agent(name: str) -> Agent:
 
 
 def agent_names() -> list:
+    """Return the supported agent names, sorted for stable CLI/help output."""
     return sorted(_AGENTS)

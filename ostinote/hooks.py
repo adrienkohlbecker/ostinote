@@ -51,12 +51,18 @@ def read_hook_input() -> tuple[dict, str]:
 
 
 def env_from_hook(data: dict) -> Env:
+    """Build the project Env from the hook payload's working directory.
+
+    Prefers the ``cwd`` the agent reported, then ``CLAUDE_PROJECT_DIR``, then
+    the process cwd — the chosen directory determines the project slug, and
+    with it which memory directory all subsequent work reads and writes.
+    """
     cwd = data.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
     return Env(cwd)
 
 
 def self_command() -> list[str]:
-    """argv prefix that re-invokes this tool in a subprocess."""
+    """Argv prefix that re-invokes this tool in a subprocess."""
     exe = shutil.which("ostinote")
     argv0 = os.path.abspath(sys.argv[0]) if sys.argv and sys.argv[0] else ""
     if argv0.endswith("ostinote") and os.access(argv0, os.X_OK):
@@ -99,7 +105,7 @@ def spawn(env: Env, args: list[str]) -> None:
 
 
 def _save_args(agent_name: str, session_id: str, transcript_path: str, cwd: str, *flags: str) -> list[str]:
-    """argv for an ``ostinote save`` subprocess; flags are extras like --force."""
+    """Argv for an ``ostinote save`` subprocess; flags are extras like --force."""
     args = ["save", "--agent", agent_name, "--session", session_id]
     args += ["--transcript", transcript_path, "--cwd", cwd]
     args += flags
@@ -148,6 +154,14 @@ def emit(agent_name: str, event_name: str, text: str) -> None:
 
 
 def session_start(agent_name: str) -> None:
+    """Handle SessionStart: queue background work, then inject memory.
+
+    Queues recovery saves for sessions that died without a final save and
+    consolidation of past-day staging files (both as detached subprocesses),
+    then prints the standing instructions plus every memory file (capped per
+    file) in the agent's envelope. Resumed and compacted sessions get the
+    background work but no injection — they already saw the memory once.
+    """
     data, input_err = read_hook_input()
     env = env_from_hook(data)
     env.ensure_dirs()
@@ -275,6 +289,13 @@ def session_end(agent_name: str) -> None:
 
 
 def post_tool(agent_name: str) -> None:
+    """Handle PostToolUse: queue a background save once enough is new.
+
+    Records the transcript path in session state on first sight (so recovery
+    can find the session even if no save ever runs), then spawns a detached
+    ``ostinote save`` only when the transcript grew past the configured line
+    delta and the per-session cooldown allows it. Prints nothing.
+    """
     data, input_err = read_hook_input()
     env = env_from_hook(data)
     if input_err:

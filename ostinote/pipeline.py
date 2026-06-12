@@ -26,6 +26,12 @@ _HEADER_RE = re.compile(r"^## ([0-9]{2}:[0-9]{2}|[0-9]{1,2}:[0-9]{2} (AM|PM)) \|
 
 
 def format_exchanges(session_id: str, total_lines: int, messages: list[Message]) -> str:
+    """Render parsed transcript messages as the plain-text extract fed to the model.
+
+    The header records the session id and total transcript line count (the
+    position the save will advance to); each message follows as a ``[ROLE]``
+    block. Also what ``save --dry`` prints for inspection.
+    """
     lines = ["Session: %s" % session_id, "Lines: %d" % total_lines, "=" * 60]
     for role, text in messages:
         lines.append("\n[%s]" % role)
@@ -313,8 +319,11 @@ def run_consolidation(env: Env) -> int:
 
 
 def parse_consolidation_response(text: str):
-    """Split the model response on ===RECENT=== / ===ARCHIVE=== / ===CORE===
-    markers. CORE is optional and holds only NEW items to append."""
+    """Split the model response on ===RECENT=== / ===ARCHIVE=== / ===CORE=== markers.
+
+    Returns ``(recent, archive, core)``. CORE is optional and holds only NEW
+    items to append; a response with no markers at all is treated as RECENT.
+    """
     text = _strip_fences(text)
     sections = {"RECENT": "", "ARCHIVE": "", "CORE": ""}
     parts = re.split(r"===(RECENT|ARCHIVE|CORE)===", text)
@@ -359,8 +368,7 @@ def _append_core(path: str, new_core: str) -> list[str]:
 
 
 def _strip_fences(text: str) -> str:
-    """Drop markdown code-fence lines the model sometimes copies from the
-    prompt's output-format example."""
+    """Drop the markdown code-fence lines the model sometimes copies from the prompt's output-format example."""
     lines = [ln for ln in text.strip().splitlines() if ln.strip() != "```"]
     return "\n".join(lines).strip()
 

@@ -96,8 +96,11 @@ def _resolve_data_dir(cfg: dict, project_root: str) -> str:
 
 
 def _within(parent: str, child: str) -> bool:
-    """True if ``child`` is ``parent`` or nested under it. Both should already
-    be absolute/realpath'd. False across Windows drives."""
+    """Return True if ``child`` is ``parent`` or nested under it.
+
+    Both paths should already be absolute/realpath'd. Returns False across
+    Windows drives.
+    """
     try:
         return os.path.commonpath([parent, child]) == parent
     except ValueError:
@@ -136,7 +139,20 @@ def data_dir_for(cwd: str) -> str:
 
 
 class Env:
+    """Resolved per-session environment: project root, config, and data layout.
+
+    Construct one per hook invocation from the session cwd; everything
+    downstream (saving, compression, recovery, logging) reads paths and
+    settings from it rather than re-resolving them.
+    """
+
     def __init__(self, cwd: str):
+        """Resolve project root, validated data dir, config, and timezone for ``cwd``.
+
+        Runs git to collapse worktrees onto the main checkout and reads both
+        config layers, so construction touches the filesystem and may spawn a
+        subprocess; it does not create any directories.
+        """
         self.cwd = os.path.abspath(cwd)
         root, cfg, guarded = _resolve_root_config(self.cwd)
         self.project_root = root
@@ -148,40 +164,54 @@ class Env:
 
     @property
     def state_dir(self) -> str:
+        """Directory for locks, timestamps, and per-session state."""
         return os.path.join(self.data_dir, "state")
 
     @property
     def sessions_dir(self) -> str:
+        """Directory of per-(agent, session) resume-position files."""
         return os.path.join(self.state_dir, "sessions")
 
     @property
     def logs_dir(self) -> str:
+        """Directory for daily activity logs and background.log."""
         return os.path.join(self.data_dir, "logs")
 
     @property
     def now_file(self) -> str:
+        """Path of now.md, the raw per-save notes awaiting compression."""
         return os.path.join(self.data_dir, "now.md")
 
     def today_file(self, date: str = "") -> str:
+        """Path of the daily summary file for ``date`` (default: today in the configured tz)."""
         return os.path.join(self.data_dir, "today-%s.md" % (date or self.today()))
 
     @property
     def recent_file(self) -> str:
+        """Path of recent.md, consolidated summaries of the last few days."""
         return os.path.join(self.data_dir, "recent.md")
 
     @property
     def archive_file(self) -> str:
+        """Path of archive.md, long-term history aged out of recent.md."""
         return os.path.join(self.data_dir, "archive.md")
 
     @property
     def identity_file(self) -> str:
+        """Path of identity.md, the standing project description injected into sessions."""
         return os.path.join(self.data_dir, "identity.md")
 
     @property
     def core_memories_file(self) -> str:
+        """Path of core-memories.md, pinned facts that never age out."""
         return os.path.join(self.data_dir, "core-memories.md")
 
     def ensure_dirs(self) -> None:
+        """Create the data-directory tree and drop a catch-all .gitignore.
+
+        Idempotent; the .gitignore keeps an in-repo data dir (``data_dir:
+        ".ostinote"``) out of version control. Failure to write it is ignored.
+        """
         for d in (self.sessions_dir, self.logs_dir):
             os.makedirs(d, exist_ok=True)
         gitignore = os.path.join(self.data_dir, ".gitignore")
@@ -193,14 +223,21 @@ class Env:
     # --- time ----------------------------------------------------------------
 
     def today(self) -> str:
+        """Return today's date as YYYY-MM-DD in the configured timezone."""
         return tzutil.today_str(self.tz)
 
     def time_now(self) -> str:
+        """Return the current clock time formatted per the ``time_format`` config."""
         return tzutil.time_str(self.tz, self.cfg["time_format"])
 
     # --- logging ---------------------------------------------------------------
 
     def log(self, component: str, message: str) -> None:
+        """Append a timestamped line to today's memory-YYYY-MM-DD.log.
+
+        Creates the data directories on first use; write errors are swallowed
+        so logging can never break a hook.
+        """
         self.ensure_dirs()
         ts = tzutil.now(self.tz).strftime("%H:%M:%S")
         line = "%s [%s] %s\n" % (ts, component, message)
@@ -210,6 +247,7 @@ class Env:
                 f.write(line)
 
     def log_tokens(self, component: str, tk_in: int, tk_out: int, tk_cache: int, cost: float) -> None:
+        """Log a summarizer call's token counts (and dollar cost, when known)."""
         detail = "tokens: %d+%dcache→%dout" % (tk_in, tk_cache, tk_out)
         if cost:
             detail += " ($%.6f)" % cost
@@ -236,6 +274,12 @@ class Env:
 
     # branch of the *session* cwd (worktrees may be on different branches)
     def git_branch(self) -> str:
+        """Return the current git branch of the session cwd, or "unknown".
+
+        Uses the session cwd, not the project root, because a worktree session
+        may be on a different branch than the main checkout. "unknown" covers
+        detached HEAD, non-repos, and git failures alike.
+        """
         try:
             out = subprocess.run(
                 ["git", "-C", self.cwd, "branch", "--show-current"],

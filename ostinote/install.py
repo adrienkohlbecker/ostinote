@@ -187,8 +187,7 @@ def _strip_managed_hooks(groups) -> list:
 
 
 def registered_events(settings: dict) -> set:
-    """Return the event names in a hooks settings dict that carry an
-    ostinote-managed hook.
+    """Return the event names in a hooks settings dict that carry an ostinote-managed hook.
 
     Tolerates malformed hook structures (a non-dict ``hooks`` value, list-typed
     groups, non-list hook arrays) by skipping them rather than raising, so
@@ -295,8 +294,11 @@ def _ensure_codex_writable_root(project_root: str) -> str:
 
 
 def _read_text_or_empty(path: str) -> str:
-    """Read a config file as text. Missing file -> "". Other read errors raise
-    _ConfigError so install fails closed instead of silently rewriting."""
+    """Read a config file as text, treating a missing file as "".
+
+    Other read errors raise _ConfigError so install fails closed instead of
+    silently rewriting a config it could not inspect.
+    """
     try:
         with open(path, encoding="utf-8") as f:
             return f.read()
@@ -307,8 +309,11 @@ def _read_text_or_empty(path: str) -> str:
 
 
 def _parse_toml(path: str, text: str) -> dict:
-    """Parse TOML text, raising _ConfigError on a decode error (so a corrupt
-    Codex config is reported and left untouched, never overwritten)."""
+    """Parse TOML text, raising _ConfigError on a decode error.
+
+    The error path matters: a corrupt Codex config is reported and left
+    untouched, never overwritten.
+    """
     try:
         return tomllib.loads(text)
     except tomllib.TOMLDecodeError as e:
@@ -348,9 +353,12 @@ def _add_writable_root(original: str, config: dict, root: str) -> str:
 
 
 def _splice_writable_root(text: str, root: str) -> str | None:
-    """Insert ``root`` into the config text near an existing writable_roots array
-    or sandbox table, or append a fresh table when neither is present. Returns
-    new text (never validated here — the caller re-parses to confirm)."""
+    """Insert ``root`` into the config text with a minimal targeted edit.
+
+    Splices into an existing writable_roots array or sandbox table, or appends
+    a fresh table when neither is present. Returns the new text unvalidated —
+    the caller re-parses to confirm the edit before trusting it.
+    """
     elem = _toml_value(root)
     match = _WRITABLE_ROOTS_OPEN.search(text)
     if match:
@@ -371,9 +379,12 @@ def _splice_writable_root(text: str, root: str) -> str | None:
 
 
 def _parses_to_expected(text: str, config: dict, root: str) -> bool:
-    """True if ``text`` parses to ``config`` with ``root`` prepended to
-    writable_roots and nothing else changed — the guard that lets us trust a
-    text splice over a structural rebuild."""
+    """Check that ``text`` parses to exactly the expected spliced config.
+
+    Returns True only when the parse equals ``config`` with ``root`` prepended
+    to writable_roots and nothing else changed — the guard that lets us trust
+    a text splice over a structural rebuild.
+    """
     try:
         parsed = tomllib.loads(text)
     except tomllib.TOMLDecodeError:

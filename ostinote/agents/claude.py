@@ -18,6 +18,8 @@ _SKIP_MARKERS = ("<system-reminder>", "<command-name>", "<local-command")
 
 
 class ClaudeAgent(Agent):
+    """Adapter for Claude Code session transcripts."""
+
     name = "claude"
 
     def _extract_messages(self, obj: dict) -> list[Message]:
@@ -30,6 +32,11 @@ class ClaudeAgent(Agent):
         return [(role, "\n".join(texts))]
 
     def find_latest_transcript(self, cwd: str) -> str | None:
+        """Return the most recently modified session file for ``cwd``, or None.
+
+        Reproduces Claude Code's project-path slugging to find the session
+        directory under ``~/.claude/projects``; picks by mtime, not filename.
+        """
         # Claude Code slugs the session directory from the project path; on
         # Windows it lowercases the drive letter (D:\proj -> d--proj).
         if os.name == "nt" and re.match(r"^[A-Za-z]:", cwd):
