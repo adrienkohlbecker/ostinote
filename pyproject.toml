@@ -16,10 +16,7 @@ classifiers = [
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
-    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3 :: Only",
     "Topic :: Software Development",
 ]
 
@@ -27,6 +24,7 @@ classifiers = [
 Homepage = "https://github.com/adrienkohlbecker/ostinote"
 Repository = "https://github.com/adrienkohlbecker/ostinote"
 Issues = "https://github.com/adrienkohlbecker/ostinote/issues"
+Changelog = "https://github.com/adrienkohlbecker/ostinote/releases"
 
 [project.scripts]
 ostinote = "ostinote.cli:main"
