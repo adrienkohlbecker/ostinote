@@ -3,8 +3,9 @@ import time
 import pytest
 
 from ostinote import pipeline as pipeline_mod
+from ostinote.pipeline import _append_core, _last_entry, format_exchanges, parse_consolidation_response
 from ostinote.state import SessionState
-from tests.helpers import codex_assistant, codex_item, codex_user, model_result, project_env
+from tests.helpers import codex_assistant, codex_user, model_result, project_env
 
 # --- Pipeline -------------------------------------------------------------------------
 
@@ -16,30 +17,10 @@ def test_run_save_appends_summary_and_advances_state(tmp_path, monkeypatch):
     transcript path, advances the session line marker, and sends the user
     message into the prompt.
     """
-    from ostinote import pipeline as pipeline_mod
-
     env = project_env(tmp_path, monkeypatch)
     transcript = tmp_path / "session.jsonl"
     transcript.write_text(
-        "\n".join(
-            [
-                codex_item(
-                    {
-                        "type": "message",
-                        "role": "user",
-                        "content": [{"type": "input_text", "text": "Add startup memory"}],
-                    }
-                ),
-                codex_item(
-                    {
-                        "type": "message",
-                        "role": "assistant",
-                        "content": [{"type": "output_text", "text": "Implemented it."}],
-                    }
-                ),
-            ]
-        )
-        + "\n",
+        codex_user("Add startup memory") + "\n" + codex_assistant("Implemented it.") + "\n",
         encoding="utf-8",
     )
     prompts_seen = []
@@ -66,21 +47,9 @@ def test_run_save_skip_advances_state_without_writing(tmp_path, monkeypatch):
     Expected: no `now.md` file is created, but the session line marker advances
     so the same unimportant transcript line is not reconsidered forever.
     """
-    from ostinote import pipeline as pipeline_mod
-
     env = project_env(tmp_path, monkeypatch)
     transcript = tmp_path / "session.jsonl"
-    transcript.write_text(
-        codex_item(
-            {
-                "type": "message",
-                "role": "user",
-                "content": [{"type": "input_text", "text": "Nothing useful"}],
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
+    transcript.write_text(codex_user("Nothing useful") + "\n", encoding="utf-8")
     # A SKIP still consumes transcript lines; the fake model lets us assert that
     # state behavior without writing real memory.
     monkeypatch.setattr(pipeline_mod.summarize, "call_model", lambda _prompt, _cfg: model_result("SKIP"))
@@ -177,21 +146,9 @@ def test_run_save_hourly_compression_moves_now_into_today(tmp_path, monkeypatch)
     Expected: the first fake model response is appended to `now.md`, the second
     compresses that buffer into today's daily file, and `now.md` is emptied.
     """
-    from ostinote import pipeline as pipeline_mod
-
     env = project_env(tmp_path, monkeypatch, {"features": {"hourly_compression": True}})
     transcript = tmp_path / "session.jsonl"
-    transcript.write_text(
-        codex_item(
-            {
-                "type": "message",
-                "role": "user",
-                "content": [{"type": "input_text", "text": "Compress this"}],
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
+    transcript.write_text(codex_user("Compress this") + "\n", encoding="utf-8")
     responses = iter(
         [
             model_result("## 11:00 | main\nCaptured thing"),
@@ -245,8 +202,6 @@ def test_run_consolidation_writes_sections_and_marks_staging_done(tmp_path, monk
     new core memory text is appended, the prompt includes the staging filename,
     and the processed daily file is renamed to `.done.md`.
     """
-    from ostinote import pipeline as pipeline_mod
-
     env = project_env(tmp_path, monkeypatch)
     env.ensure_dirs()
     staging = tmp_path / "data" / "today-2000-01-01.md"
@@ -346,21 +301,9 @@ def test_run_save_rejects_malformed_header(tmp_path, monkeypatch):
     session line marker is not persisted, so the same transcript lines are
     retried on the next save instead of being lost.
     """
-    from ostinote import pipeline as pipeline_mod
-
     env = project_env(tmp_path, monkeypatch)
     transcript = tmp_path / "session.jsonl"
-    transcript.write_text(
-        codex_item(
-            {
-                "type": "message",
-                "role": "user",
-                "content": [{"type": "input_text", "text": "Do a thing"}],
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
+    transcript.write_text(codex_user("Do a thing") + "\n", encoding="utf-8")
     monkeypatch.setattr(
         pipeline_mod.summarize,
         "call_model",
@@ -371,3 +314,117 @@ def test_run_save_rejects_malformed_header(tmp_path, monkeypatch):
 
     assert not (tmp_path / "data" / "now.md").exists()
     assert SessionState.load(env.sessions_dir, "codex", "s1").line == 0
+
+
+# --- Extract formatting ----------------------------------------------------------
+
+
+def test_format_exchanges():
+    """Format parsed transcript messages into the model prompt excerpt.
+
+    Expected: the output includes the session id, total transcript line count,
+    and clearly labeled HUMAN/AGENT blocks so the summarizer sees structured
+    context.
+    """
+    text = format_exchanges("sid", 12, [("HUMAN", "hi"), ("AGENT", "hello")])
+    assert text.startswith("Session: sid\nLines: 12")
+    assert "[HUMAN]\nhi" in text
+    assert "[AGENT]\nhello" in text
+
+
+def test_last_entry(tmp_path):
+    """Find the last saved `now.md` entry for deduplication context.
+
+    Expected: a missing file reports no previous entry, and a file with multiple
+    `## time | branch` blocks returns only the final block.
+    """
+    now = tmp_path / "now.md"
+    assert _last_entry(str(now)) == "(no previous entry)"
+    now.write_text("\n## 10:00 | main\nfirst\n\n## 11:30 | main\nsecond thing\n")
+    assert _last_entry(str(now)) == "## 11:30 | main\nsecond thing"
+
+
+# --- Consolidation parsing -------------------------------------------------------
+
+
+def test_parse_consolidation_full():
+    """Split a complete consolidation response into recent and archive files.
+
+    Expected: `===RECENT===` and `===ARCHIVE===` markers are stripped, each
+    section keeps its Markdown heading, and the optional core section is empty.
+    """
+    text = "===RECENT===\n# Recent\n\nA\n\n===ARCHIVE===\n# Archive\n\nB"
+    recent, archive, core = parse_consolidation_response(text)
+    assert recent == "# Recent\n\nA"
+    assert archive == "# Archive\n\nB"
+    assert core == ""
+
+
+def test_parse_consolidation_core_section():
+    """Parse a consolidation response that promotes a new core memory.
+
+    Expected: recent and archive are parsed as usual, and text after
+    `===CORE===` is returned separately for appending to `core-memories.md`.
+    """
+    text = "===RECENT===\n# Recent\n\nA\n===ARCHIVE===\n# Archive\n\nB\n===CORE===\n- 2026-06-10: chose MIT"
+    recent, archive, core = parse_consolidation_response(text)
+    assert recent == "# Recent\n\nA"
+    assert archive == "# Archive\n\nB"
+    assert core == "- 2026-06-10: chose MIT"
+
+
+def test_parse_consolidation_fallbacks():
+    """Treat unmarked consolidation output as replacement recent memory.
+
+    Expected: bare content becomes a `# Recent` document, while archive and core
+    stay empty. This is the forgiving path for imperfect model formatting.
+    """
+    recent, archive, core = parse_consolidation_response("bare content")
+    assert recent == "# Recent\n\nbare content"
+    assert archive == ""
+    assert core == ""
+
+
+def test_parse_consolidation_strips_fences():
+    """Ignore Markdown code fences copied into model consolidation output.
+
+    Expected: fence-only lines are removed before marker parsing, so recent and
+    archive content are extracted normally even if the model wrapped examples in
+    triple backticks.
+    """
+    text = "```\n===RECENT===\n# Recent\n\nA\n```\n===ARCHIVE===\n```\n# Archive\n\nB\n```"
+    recent, archive, core = parse_consolidation_response(text)
+    assert recent == "# Recent\n\nA"
+    assert archive == "# Archive\n\nB"
+    assert core == ""
+
+
+def test_append_core(tmp_path):
+    """Append promoted core-memory lines to the persistent core file.
+
+    Expected: the first append creates the `# Core Memories` heading, later
+    appends preserve the existing content and add one line per promoted fact,
+    and the appended lines are returned for logging.
+    """
+    path = str(tmp_path / "core-memories.md")
+    assert _append_core(path, "- 2026-06-10: a") == ["- 2026-06-10: a"]
+    assert _append_core(path, "- 2026-06-11: b") == ["- 2026-06-11: b"]
+    with open(path) as f:
+        assert f.read() == "# Core Memories\n\n- 2026-06-10: a\n- 2026-06-11: b\n"
+
+
+def test_append_core_filters_malformed_lines(tmp_path):
+    """Keep only `- YYYY-MM-DD: fact` lines when promoting core memories.
+
+    Expected: model commentary, undated bullets, and whitespace-only sections
+    never reach core-memories.md (which is injected verbatim into every future
+    session), and a section with no valid line writes nothing at all.
+    """
+    path = str(tmp_path / "core-memories.md")
+    kept = _append_core(path, "Here are the memories:\n- 2026-06-12: real fact\n- undated noise\n")
+    assert kept == ["- 2026-06-12: real fact"]
+    with open(path) as f:
+        assert f.read() == "# Core Memories\n\n- 2026-06-12: real fact\n"
+
+    assert _append_core(str(tmp_path / "other.md"), "   \n") == []
+    assert not (tmp_path / "other.md").exists()

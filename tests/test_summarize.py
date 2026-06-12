@@ -105,3 +105,54 @@ def test_call_model_empty_command_falls_back_to_default(monkeypatch):
     assert captured["cmd"] == summarize.DEFAULT_COMMAND
     assert captured["kwargs"]["timeout"] == 5
 
+
+# --- Response parsing ------------------------------------------------------------
+
+
+def test_parse_response_dict():
+    """Parse the common JSON object shape returned by the summarizer command.
+
+    Expected: result text, skip status, token counts, and reported cost are all
+    copied into the `ModelResult` wrapper.
+    """
+    raw = json.dumps(
+        {
+            "result": "## 10:00 | main\ndid stuff",
+            "usage": {"input_tokens": 100, "output_tokens": 20},
+            "total_cost_usd": 0.001,
+        }
+    )
+    r = summarize.parse_response(raw)
+    assert r.text.startswith("## 10:00")
+    assert not r.is_skip
+    assert r.tokens.input == 100
+    assert r.tokens.cost_usd == 0.001
+
+
+def test_parse_response_list_and_skip():
+    """Parse the newer list-of-events JSON shape and recognize SKIP.
+
+    Expected: the last result event is used, and a `SKIP` response is marked as
+    a skip so the pipeline advances state without writing memory.
+    """
+    raw = json.dumps(
+        [
+            {
+                "type": "result",
+                "result": "SKIP",
+                "usage": {"input_tokens": 5, "output_tokens": 1},
+            }
+        ]
+    )
+    r = summarize.parse_response(raw)
+    assert r.is_skip
+
+
+def test_parse_response_plain_text():
+    """Accept plain text summarizer output.
+
+    Expected: non-JSON stdout is treated as the model text verbatim, which keeps
+    alternate summarizer commands usable.
+    """
+    r = summarize.parse_response("just words")
+    assert r.text == "just words"

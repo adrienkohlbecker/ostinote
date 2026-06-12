@@ -1,10 +1,9 @@
 import json
 import os
-import time
-
-import pytest
+import re
 
 from ostinote import config as config_mod
+from ostinote.env import Env, _slugify
 from ostinote.state import PidLock, SessionState
 
 # --- State and locks -------------------------------------------------------------------
@@ -73,67 +72,6 @@ def test_pid_lock_stale_takeover(tmp_path):
     assert PidLock(path).acquire()
 
 
-def test_recovery_uses_saved_line_not_failed_attempt_time(tmp_path, monkeypatch):
-    """Recover missed transcript lines even after a failed save attempt.
-
-    Expected: recovery compares transcript line count to the saved line marker,
-    not `last_attempt_ts`; unsaved idle content queues a forced background save.
-    """
-    from ostinote import hooks
-
-    transcript = tmp_path / "session.jsonl"
-    transcript.write_text("{}\n{}\n{}\n")
-    # Recovery deliberately ignores transcripts that still look active.
-    idle_mtime = time.time() - hooks._RECOVERY_ACTIVE_WINDOW - 1
-    os.utime(transcript, (idle_mtime, idle_mtime))
-
-    sessions = tmp_path / "sessions"
-    state = SessionState.load(str(sessions), "codex", "session")
-    state.transcript_path = str(transcript)
-    state.line = 1
-    state.last_attempt_ts = time.time()
-    state.save()
-
-    queued = []
-    # `_recover_missed` only needs the Env attributes below; using a tiny stub
-    # keeps the test focused on recovery selection, not full Env construction.
-    env = type("EnvStub", (), {"sessions_dir": str(sessions), "cwd": str(tmp_path)})()
-    monkeypatch.setattr(hooks, "spawn", lambda _env, args: queued.append(args))
-
-    assert hooks._recover_missed(env) == 1
-    assert queued
-    assert "--force" in queued[0]
-
-
-def test_recovery_skips_fully_saved_transcripts(tmp_path, monkeypatch):
-    """Avoid recovery work for transcripts already saved through their end.
-
-    Expected: if the saved line marker equals the transcript line count, no
-    background save is queued.
-    """
-    from ostinote import hooks
-
-    transcript = tmp_path / "session.jsonl"
-    transcript.write_text("{}\n{}\n")
-    # Make the transcript old enough to pass the "not actively changing" gate.
-    idle_mtime = time.time() - hooks._RECOVERY_ACTIVE_WINDOW - 1
-    os.utime(transcript, (idle_mtime, idle_mtime))
-
-    sessions = tmp_path / "sessions"
-    state = SessionState.load(str(sessions), "codex", "session")
-    state.transcript_path = str(transcript)
-    state.line = 2
-    state.save()
-
-    queued = []
-    # Intercept background process creation so the assertion can inspect intent.
-    env = type("EnvStub", (), {"sessions_dir": str(sessions), "cwd": str(tmp_path)})()
-    monkeypatch.setattr(hooks, "spawn", lambda _env, args: queued.append(args))
-
-    assert hooks._recover_missed(env) == 0
-    assert queued == []
-
-
 # --- Config ---------------------------------------------------------------------------
 
 
@@ -161,8 +99,6 @@ def test_data_dir_slug_placeholder(tmp_path, monkeypatch):
     plus a sanitized project path, matching the Claude/claude-remember style
     slug including the leading dash on Unix paths.
     """
-    from ostinote.env import Env
-
     proj = tmp_path / "proj"
     (proj / ".ostinote").mkdir(parents=True)
     store = tmp_path / "store"
@@ -173,7 +109,6 @@ def test_data_dir_slug_placeholder(tmp_path, monkeypatch):
     monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", str(user_cfg))
     (proj / ".ostinote" / "config.json").write_text(json.dumps({"share_worktrees": False}))
     env = Env(str(proj))
-    import re
 
     # claude-remember / Claude Code slug scheme: leading dash kept.
     # Windows paths start with drive letters instead.
@@ -263,8 +198,6 @@ def test_env_rejects_project_data_dir_escaping_repo(tmp_path, monkeypatch):
     ~/.ostinote (an arbitrary-write / Codex-sandbox-escape attempt) is ignored,
     and Env falls back to the default `~/.ostinote/projects/<slug>` layout.
     """
-    from ostinote.env import Env, _slugify
-
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", str(tmp_path / "no-user.json"))
     proj = tmp_path / "proj"
@@ -284,8 +217,6 @@ def test_env_allows_project_data_dir_inside_repo(tmp_path, monkeypatch):
     Expected: a relative `.ostinote` data_dir resolves under the project root
     and is kept, because it does not escape the repo.
     """
-    from ostinote.env import Env
-
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", str(tmp_path / "no-user.json"))
     proj = tmp_path / "proj"
@@ -302,8 +233,6 @@ def test_env_trusts_user_data_dir_anywhere(tmp_path, monkeypatch):
     Expected: a user-config data_dir outside the repo and ~/.ostinote is used
     as-is — the containment check only applies to the untrusted project layer.
     """
-    from ostinote.env import Env
-
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     user_cfg = tmp_path / "user.json"
     user_cfg.write_text(json.dumps({"data_dir": str(tmp_path / "elsewhere")}))
@@ -314,33 +243,3 @@ def test_env_trusts_user_data_dir_anywhere(tmp_path, monkeypatch):
 
     env = Env(str(proj))
     assert env.data_dir == os.path.realpath(str(tmp_path / "elsewhere"))
-
-
-def test_costs_day_totals(tmp_path):
-    """Summarize token and cost lines from daily memory logs.
-
-    Expected: only `memory-YYYY-MM-DD.log` files with token lines count; totals
-    aggregate calls, input, cache, output, and only the cost values actually
-    reported by the model engine.
-    """
-    from ostinote import costs
-
-    logs = tmp_path / "logs"
-    logs.mkdir()
-    (logs / "memory-2026-06-09.log").write_text(
-        "12:00:00 [save] tokens: 100+50cache→20out ($0.000123)\n"
-        "12:30:00 [compress] tokens: 200+0cache→40out\n"
-        "12:31:00 [hook] not a token line\n",
-        encoding="utf-8",
-    )
-    (logs / "memory-2026-06-10.log").write_text("09:00:00 [hook] no calls today\n", encoding="utf-8")
-    (logs / "background.log").write_text("[save] tokens: 9+9cache→9out ($9)\n", encoding="utf-8")
-
-    days = costs.day_totals(str(logs))
-    assert [d for d, _ in days] == ["2026-06-09"]  # only daily logs with calls
-    totals = days[0][1]
-    assert totals["calls"] == 2
-    assert totals["input"] == 300
-    assert totals["cache"] == 50
-    assert totals["output"] == 60
-    assert totals["cost"] == pytest.approx(0.000123)  # unreported cost not invented
