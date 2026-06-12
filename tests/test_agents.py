@@ -24,6 +24,28 @@ def test_claude_parse(claude_transcript):
     assert "[TOOL: Bash `pytest -x tests/`]" in agent_text
 
 
+def test_parse_skips_malformed_lines(tmp_path, capsys):
+    """Survive a transcript line truncated mid-write.
+
+    Expected: the malformed JSONL line is skipped but still counted in the
+    resume offset, surrounding messages parse normally, and the skip is
+    reported on stderr so spawned saves leave a trace in background.log.
+    """
+    from tests.conftest import claude_line
+
+    path = tmp_path / "session.jsonl"
+    path.write_text(
+        claude_line("user", "hello") + "\n" + '{"type": "user", "mess\n' + claude_line("user", "world") + "\n",
+        encoding="utf-8",
+    )
+
+    messages, total = ClaudeAgent().parse(str(path))
+
+    assert total == 3
+    assert messages == [("HUMAN", "hello"), ("HUMAN", "world")]
+    assert "skipped 1 malformed transcript line(s)" in capsys.readouterr().err
+
+
 def test_claude_parse_incremental(claude_transcript):
     """Resume Claude parsing from a saved line offset.
 

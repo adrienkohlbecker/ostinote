@@ -9,7 +9,6 @@ system-reminder content, and condense tool_use blocks into short markers.
 from __future__ import annotations
 
 import glob
-import json
 import os
 import re
 
@@ -21,33 +20,14 @@ _SKIP_MARKERS = ("<system-reminder>", "<command-name>", "<local-command")
 class ClaudeAgent(Agent):
     name = "claude"
 
-    def parse(self, transcript_path: str, skip_lines: int = 0) -> tuple[list[Message], int]:
-        messages: list[Message] = []
-        total = 0
-        try:
-            f = open(transcript_path, encoding="utf-8", errors="replace")
-        except OSError:
-            return messages, 0
-
-        with f:
-            for line_num, line in enumerate(f):
-                total = line_num + 1
-                if line_num < skip_lines:
-                    continue
-                try:
-                    obj = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-
-                if obj.get("type") not in ("user", "assistant") or obj.get("isMeta"):
-                    continue
-
-                texts = _extract_texts(obj.get("message", {}).get("content", ""))
-                if texts:
-                    role = "HUMAN" if obj["type"] == "user" else "AGENT"
-                    messages.append((role, "\n".join(texts)))
-
-        return messages, total
+    def _extract_messages(self, obj: dict) -> list[Message]:
+        if obj.get("type") not in ("user", "assistant") or obj.get("isMeta"):
+            return []
+        texts = _extract_texts(obj.get("message", {}).get("content", ""))
+        if not texts:
+            return []
+        role = "HUMAN" if obj["type"] == "user" else "AGENT"
+        return [(role, "\n".join(texts))]
 
     def find_latest_transcript(self, cwd: str) -> str | None:
         # Claude Code slugs the session directory from the project path; on

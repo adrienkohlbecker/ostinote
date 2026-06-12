@@ -41,45 +41,29 @@ SESSIONS_ROOT = os.path.expanduser("~/.codex/sessions")
 class CodexAgent(Agent):
     name = "codex"
 
-    def parse(self, transcript_path: str, skip_lines: int = 0) -> tuple[list[Message], int]:
-        messages: list[Message] = []
-        total = 0
-        try:
-            f = open(transcript_path, encoding="utf-8", errors="replace")
-        except OSError:
-            return messages, 0
+    def _extract_messages(self, obj: dict) -> list[Message]:
+        if obj.get("type") != "response_item":
+            return []
+        payload = obj.get("payload", {})
+        ptype = payload.get("type")
 
-        with f:
-            for line_num, line in enumerate(f):
-                total = line_num + 1
-                if line_num < skip_lines:
-                    continue
-                try:
-                    obj = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if obj.get("type") != "response_item":
-                    continue
-                payload = obj.get("payload", {})
-                ptype = payload.get("type")
-
-                if ptype == "message":
-                    role = payload.get("role")
-                    # "developer" carries injected context (permissions,
-                    # hook output) — not conversation.
-                    if role not in ("user", "assistant"):
-                        continue
-                    texts = _message_texts(payload.get("content", []), role)
-                    if texts:
-                        messages.append(("HUMAN" if role == "user" else "AGENT", "\n".join(texts)))
-                elif ptype == "function_call":
-                    messages.append(("AGENT", _format_function_call(payload)))
-                elif ptype == "custom_tool_call":
-                    name = payload.get("name", "?")
-                    detail = Agent._truncate(str(payload.get("input", "")))
-                    messages.append(("AGENT", "[TOOL: %s %s]" % (name, detail)))
-
-        return messages, total
+        if ptype == "message":
+            role = payload.get("role")
+            # "developer" carries injected context (permissions, hook
+            # output) — not conversation.
+            if role not in ("user", "assistant"):
+                return []
+            texts = _message_texts(payload.get("content", []), role)
+            if not texts:
+                return []
+            return [("HUMAN" if role == "user" else "AGENT", "\n".join(texts))]
+        if ptype == "function_call":
+            return [("AGENT", _format_function_call(payload))]
+        if ptype == "custom_tool_call":
+            name = payload.get("name", "?")
+            detail = Agent._truncate(str(payload.get("input", "")))
+            return [("AGENT", "[TOOL: %s %s]" % (name, detail))]
+        return []
 
     def find_latest_transcript(self, cwd: str) -> str | None:
         """Scan the last few day-directories for the newest rollout whose
