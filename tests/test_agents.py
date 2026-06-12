@@ -173,13 +173,7 @@ def test_codex_parse_tool_edge_cases(tmp_path):
         "\n".join(
             [
                 codex_item({"type": "message", "role": "developer", "content": [{"type": "text", "text": "ignore"}]}),
-                codex_item(
-                    {
-                        "type": "message",
-                        "role": "user",
-                        "content": [{"type": "input_text", "text": "<hook>ignore injected</hook>"}],
-                    }
-                ),
+                codex_user("<hook>ignore injected</hook>"),
                 codex_item(
                     {
                         "type": "function_call",

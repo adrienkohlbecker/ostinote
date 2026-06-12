@@ -4,7 +4,13 @@ import shlex
 import subprocess
 import sys
 
-from tests.helpers import codex_item, functional_cli_project, run_cli
+import pytest
+
+from tests.helpers import codex_assistant, codex_user, functional_cli_project, run_cli
+
+# End-to-end subprocess tests of the real CLI; deselect with -m "not functional"
+# for a fast inner loop while iterating on parsers or hooks.
+pytestmark = pytest.mark.functional
 
 
 def test_cli_save_functional_with_fake_summarizer(tmp_path):
@@ -18,25 +24,7 @@ def test_cli_save_functional_with_fake_summarizer(tmp_path):
     env["OSTINOTE_FAKE_RESULT"] = "## 12:00 | main\nfunctional save"
     transcript = tmp_path / "rollout.jsonl"
     transcript.write_text(
-        "\n".join(
-            [
-                codex_item(
-                    {
-                        "type": "message",
-                        "role": "user",
-                        "content": [{"type": "input_text", "text": "Remember functional path"}],
-                    }
-                ),
-                codex_item(
-                    {
-                        "type": "message",
-                        "role": "assistant",
-                        "content": [{"type": "output_text", "text": "Done."}],
-                    }
-                ),
-            ]
-        )
-        + "\n",
+        codex_user("Remember functional path") + "\n" + codex_assistant("Done.") + "\n",
         encoding="utf-8",
     )
 
@@ -104,6 +92,34 @@ def test_cli_status_functional_reports_memory_files(tmp_path):
     assert "project root : %s" % proj in result.stdout
     assert "recent.md" in result.stdout
     assert "tracked sessions: 0" in result.stdout
+
+
+def test_cli_status_costs_functional_reports_day_totals(tmp_path):
+    """Run `status --costs` against seeded daily logs.
+
+    Expected: a fresh project reports that no model calls are logged; with a
+    seeded daily log, the day row aggregates calls/tokens and only the cost
+    the engine actually reported, and the totals row matches.
+    """
+    proj, data, env, _prompt_log = functional_cli_project(tmp_path)
+
+    empty = run_cli(["status", "--costs", "--cwd", str(proj)], proj, env)
+    assert empty.returncode == 0, empty.stderr
+    assert "no model calls logged" in empty.stdout
+
+    logs = data / "logs"
+    logs.mkdir(parents=True)
+    (logs / "memory-2026-06-09.log").write_text(
+        "12:00:00 [save] tokens: 100+50cache→20out ($0.000123)\n12:30:00 [compress] tokens: 200+0cache→40out\n",
+        encoding="utf-8",
+    )
+
+    result = run_cli(["status", "--costs", "--cwd", str(proj)], proj, env)
+
+    assert result.returncode == 0, result.stderr
+    rows = {line.split()[0]: line.split() for line in result.stdout.splitlines() if line.strip()}
+    assert rows["2026-06-09"] == ["2026-06-09", "2", "300", "50", "60", "$0.0001"]
+    assert rows["total"] == ["total", "2", "300", "50", "60", "$0.0001"]
 
 
 def test_cli_install_codex_hook_functional_injects_memory(tmp_path):

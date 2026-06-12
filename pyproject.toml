@@ -66,6 +66,7 @@ ignore = [
 testpaths = ["tests"]
 minversion = "9.0"
 addopts = ["-ra", "--strict-config", "--strict-markers"]
+markers = ["functional: end-to-end subprocess tests of the real CLI"]
 filterwarnings = ["error"]
 # Dump thread tracebacks if a test (e.g. a stdin-blocked subprocess) hangs.
 faulthandler_timeout = 120

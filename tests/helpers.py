@@ -183,17 +183,22 @@ def functional_cli_project(tmp_path, extra_cfg=None):
         encoding="utf-8",
     )
 
-    env = os.environ.copy()
-    # A leaked CLAUDE_PROJECT_DIR (set when this suite runs inside a Claude
-    # session) is the cwd fallback for hooks — it must never point a
-    # functional subprocess at the real project being developed.
-    env.pop("CLAUDE_PROJECT_DIR", None)
-    for key in [k for k in env if k.startswith("OSTINOTE_")]:
-        env.pop(key)
-    env["HOME"] = str(home)
-    env["USERPROFILE"] = str(home)
-    env["PYTHONPATH"] = repo_root + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
-    env["OSTINOTE_FAKE_PROMPTS"] = str(prompt_log)
+    # Build the subprocess env from scratch (allow-list). Copying os.environ
+    # would leak the developer's shell secrets into the SUT, and a deny-list
+    # rots: any variable the SUT later starts honoring would silently
+    # re-point functional tests at real state.
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": str(home),
+        "USERPROFILE": str(home),
+        "PYTHONPATH": repo_root,
+        "OSTINOTE_FAKE_PROMPTS": str(prompt_log),
+    }
+    # Platform essentials: Windows needs the system dirs to start processes,
+    # and locale vars keep Python's text I/O matching the developer's setup.
+    for key in ("SYSTEMROOT", "SYSTEMDRIVE", "COMSPEC", "TEMP", "TMP", "LANG", "LC_ALL"):
+        if key in os.environ:
+            env[key] = os.environ[key]
     return proj, tmp_path / "data", env, prompt_log
 
 
