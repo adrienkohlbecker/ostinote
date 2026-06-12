@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 
 import pytest
 
@@ -7,6 +8,30 @@ from ostinote import config as config_mod
 from ostinote.env import Env, _slugify
 from ostinote.state import PidLock, SessionState
 from tests.helpers import expected_slug
+
+
+def _project(tmp_path, cfg):
+    """Create a project directory holding the given .ostinote/config.json.
+
+    The config dict is the one input that distinguishes the Env/config tests
+    from each other; this keeps it visible at the call site.
+    """
+    proj = tmp_path / "proj"
+    (proj / ".ostinote").mkdir(parents=True)
+    (proj / ".ostinote" / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
+    return proj
+
+
+def _git(cwd, *args):
+    """Run git in ``cwd`` with identity flags so commits work in the bare test HOME."""
+    subprocess.run(
+        ["git", "-C", str(cwd), "-c", "user.email=test@test", "-c", "user.name=test", *args],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
 
 # --- State and locks -------------------------------------------------------------------
 
@@ -74,6 +99,31 @@ def test_pid_lock_stale_takeover(tmp_path):
     assert PidLock(path).acquire()
 
 
+def test_pid_lock_steals_garbage_content(tmp_path):
+    """Recover from a lock file corrupted by a crash mid-write.
+
+    Expected: unparseable lock content is treated as stale rather than as a
+    live holder, so a corrupted lock cannot block all future saves.
+    """
+    path = str(tmp_path / "x.lock")
+    with open(path, "w") as f:
+        f.write("not-a-pid")
+    assert PidLock(path).acquire()
+
+
+def test_pid_lock_does_not_steal_from_live_process(tmp_path):
+    """Never steal a lock whose recorded PID is alive.
+
+    Expected: a lock naming this very test process is refused — stealing from
+    a live holder would let two background saves interleave writes to the
+    shared memory files.
+    """
+    path = str(tmp_path / "x.lock")
+    with open(path, "w") as f:
+        f.write(str(os.getpid()))
+    assert not PidLock(path).acquire()
+
+
 # --- Config ---------------------------------------------------------------------------
 
 
@@ -85,9 +135,7 @@ def test_config_project_overrides(tmp_path, monkeypatch):
     """
     monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", str(tmp_path / "user.json"))
     (tmp_path / "user.json").write_text(json.dumps({"cooldowns": {"save_seconds": 60}, "timezone": "UTC"}))
-    proj = tmp_path / "proj"
-    (proj / ".ostinote").mkdir(parents=True)
-    (proj / ".ostinote" / "config.json").write_text(json.dumps({"cooldowns": {"save_seconds": 30}}))
+    proj = _project(tmp_path, {"cooldowns": {"save_seconds": 30}})
     cfg = config_mod.load(str(proj))
     assert cfg["cooldowns"]["save_seconds"] == 30
     assert cfg["cooldowns"]["compress_seconds"] == 3600  # default survives
@@ -101,15 +149,13 @@ def test_data_dir_slug_placeholder(tmp_path, monkeypatch):
     plus a sanitized project path, matching the Claude/claude-remember style
     slug including the leading dash on Unix paths.
     """
-    proj = tmp_path / "proj"
-    (proj / ".ostinote").mkdir(parents=True)
+    proj = _project(tmp_path, {"share_worktrees": False})
     store = tmp_path / "store"
     # data_dir is honored only from the trusted user layer; a project-layer
     # value pointing outside the repo would be rejected as an untrusted redirect.
     user_cfg = tmp_path / "user-config.json"
     user_cfg.write_text(json.dumps({"data_dir": str(store / "{slug}")}))
     monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", str(user_cfg))
-    (proj / ".ostinote" / "config.json").write_text(json.dumps({"share_worktrees": False}))
     env = Env(str(proj))
 
     # claude-remember / Claude Code slug scheme: leading dash kept.
@@ -162,11 +208,7 @@ def test_project_config_cannot_set_summarizer_command(tmp_path, monkeypatch):
     """
     monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", str(tmp_path / "user.json"))
     (tmp_path / "user.json").write_text(json.dumps({"summarizer": {"command": ["trusted-engine"]}}))
-    proj = tmp_path / "proj"
-    (proj / ".ostinote").mkdir(parents=True)
-    (proj / ".ostinote" / "config.json").write_text(
-        json.dumps({"summarizer": {"command": ["rm", "-rf", "/"], "timeout": 1}})
-    )
+    proj = _project(tmp_path, {"summarizer": {"command": ["rm", "-rf", "/"], "timeout": 1}})
 
     cfg, guarded = config_mod.load_trusted(str(proj))
     # The malicious project command is dropped; the trusted user command wins,
@@ -184,9 +226,7 @@ def test_project_config_data_dir_is_flagged_guarded(tmp_path, monkeypatch):
     not flagged.
     """
     monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", str(tmp_path / "user.json"))
-    proj = tmp_path / "proj"
-    (proj / ".ostinote").mkdir(parents=True)
-    (proj / ".ostinote" / "config.json").write_text(json.dumps({"data_dir": ".ostinote"}))
+    proj = _project(tmp_path, {"data_dir": ".ostinote"})
 
     cfg, guarded = config_mod.load_trusted(str(proj))
     assert cfg["data_dir"] == ".ostinote"
@@ -201,10 +241,8 @@ def test_env_rejects_project_data_dir_escaping_repo(tmp_path, monkeypatch):
     and Env falls back to the default `~/.ostinote/projects/<slug>` layout.
     """
     monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", str(tmp_path / "no-user.json"))
-    proj = tmp_path / "proj"
-    (proj / ".ostinote").mkdir(parents=True)
     escape = tmp_path / "evil"
-    (proj / ".ostinote" / "config.json").write_text(json.dumps({"data_dir": str(escape), "share_worktrees": False}))
+    proj = _project(tmp_path, {"data_dir": str(escape), "share_worktrees": False})
 
     env = Env(str(proj))
     expected = os.path.realpath(os.path.expanduser("~/.ostinote/projects/%s" % _slugify(str(proj))))
@@ -223,12 +261,10 @@ def test_env_rejects_project_data_dir_symlink_escape(tmp_path, monkeypatch):
     grant the cloned repo an arbitrary write target.
     """
     monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", str(tmp_path / "no-user.json"))
-    proj = tmp_path / "proj"
-    (proj / ".ostinote").mkdir(parents=True)
+    proj = _project(tmp_path, {"data_dir": "memdir", "share_worktrees": False})
     escape = tmp_path / "evil"
     escape.mkdir()
     os.symlink(str(escape), str(proj / "memdir"))
-    (proj / ".ostinote" / "config.json").write_text(json.dumps({"data_dir": "memdir", "share_worktrees": False}))
 
     env = Env(str(proj))
     expected = os.path.realpath(os.path.expanduser("~/.ostinote/projects/%s" % _slugify(str(proj))))
@@ -243,9 +279,7 @@ def test_env_allows_project_data_dir_inside_repo(tmp_path, monkeypatch):
     and is kept, because it does not escape the repo.
     """
     monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", str(tmp_path / "no-user.json"))
-    proj = tmp_path / "proj"
-    (proj / ".ostinote").mkdir(parents=True)
-    (proj / ".ostinote" / "config.json").write_text(json.dumps({"data_dir": ".ostinote", "share_worktrees": False}))
+    proj = _project(tmp_path, {"data_dir": ".ostinote", "share_worktrees": False})
 
     env = Env(str(proj))
     assert env.data_dir == os.path.realpath(str(proj / ".ostinote"))
@@ -260,9 +294,53 @@ def test_env_trusts_user_data_dir_anywhere(tmp_path, monkeypatch):
     user_cfg = tmp_path / "user.json"
     user_cfg.write_text(json.dumps({"data_dir": str(tmp_path / "elsewhere")}))
     monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", str(user_cfg))
-    proj = tmp_path / "proj"
-    (proj / ".ostinote").mkdir(parents=True)
-    (proj / ".ostinote" / "config.json").write_text(json.dumps({"share_worktrees": False}))
+    proj = _project(tmp_path, {"share_worktrees": False})
 
     env = Env(str(proj))
     assert env.data_dir == os.path.realpath(str(tmp_path / "elsewhere"))
+
+
+# --- Worktree root resolution ------------------------------------------------------------
+
+
+def test_env_shares_worktree_memory_with_main_checkout(tmp_path):
+    """Collapse a linked git worktree onto the main checkout's memory.
+
+    Expected: with `share_worktrees: true` (the default), an Env built from a
+    linked worktree resolves project_root to the main checkout, so parallel
+    worktree sessions read and write one shared memory directory instead of
+    silently splitting the project's memory per worktree.
+    """
+    main = tmp_path / "main"
+    (main / ".ostinote").mkdir(parents=True)
+    (main / ".ostinote" / "config.json").write_text(json.dumps({"share_worktrees": True}), encoding="utf-8")
+    _git(main, "init", "-q")
+    _git(main, "add", ".")
+    _git(main, "commit", "-q", "-m", "init")
+    _git(main, "worktree", "add", "-q", str(tmp_path / "wt"))
+
+    env = Env(str(tmp_path / "wt"))
+
+    assert env.project_root == str(main)
+    assert env.data_dir == Env(str(main)).data_dir
+
+
+def test_env_worktree_opt_out_uses_own_root(tmp_path):
+    """Honor `share_worktrees: false` by re-resolving against the worktree.
+
+    Expected: when the project config opts out of shared worktree memory, the
+    worktree's own checkout becomes the project root, giving it an independent
+    memory directory.
+    """
+    main = tmp_path / "main"
+    (main / ".ostinote").mkdir(parents=True)
+    (main / ".ostinote" / "config.json").write_text(json.dumps({"share_worktrees": False}), encoding="utf-8")
+    _git(main, "init", "-q")
+    _git(main, "add", ".")
+    _git(main, "commit", "-q", "-m", "init")
+    _git(main, "worktree", "add", "-q", str(tmp_path / "wt"))
+
+    env = Env(str(tmp_path / "wt"))
+
+    assert env.project_root == str(tmp_path / "wt")
+    assert env.data_dir != Env(str(main)).data_dir
