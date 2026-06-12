@@ -41,7 +41,7 @@ For hook/parser work, also consider:
 ```bash
 mise run dry:claude
 mise run dry:codex
-mise run status
+ostinote status
 ```
 
 If a command fails because the local environment lacks an installed agent CLI or live summarizer access, report that clearly and include the exact failing command.

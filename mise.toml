@@ -43,10 +43,6 @@ run = "uv tool install --editable . --force"
 description = "Remove the global `ostinote` CLI"
 run = "uv tool uninstall ostinote"
 
-[tasks.status]
-description = "Show memory state for this project"
-run = 'ostinote status "$@"'
-
 # Parser debugging: print what the extractor sees, no model call, no writes.
 [tasks."dry:claude"]
 description = "Dry-run extraction of the latest Claude session for this project"
@@ -55,7 +51,3 @@ run = 'ostinote save --dry --agent claude "$@"'
 [tasks."dry:codex"]
 description = "Dry-run extraction of the latest Codex session for this project"
 run = 'ostinote save --dry --agent codex "$@"'
-
-[tasks.consolidate]
-description = "Force consolidation of past-day staging files into recent/archive"
-run = "ostinote consolidate"
