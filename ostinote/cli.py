@@ -39,13 +39,25 @@ from . import pipeline
 from .agents import agent_names
 from .env import Env
 
+# Hook tracebacks can quote transcript-derived strings in exception messages;
+# keep only the tail (innermost frames plus the message) so the error log
+# stays debuggable without accumulating session content.
+_TRACEBACK_TAIL_LINES = 30
+
 
 def main(argv: list[str] | None = None) -> int:
     """Parse arguments and dispatch to the matching command handler.
 
     Returns the command's exit code rather than calling ``sys.exit`` itself,
-    so tests can invoke it directly.
+    so tests can invoke it directly. ``hook`` invocations are routed around
+    normal parsing: argparse exits 2 on bad arguments, which Claude Code
+    treats as a blocking hook error, so for hooks even parsing must run
+    inside the never-fail shield.
     """
+    if argv is None:
+        argv = sys.argv[1:]
+    if argv[:1] == ["hook"]:
+        return _hook_main(argv)
     args = _build_parser().parse_args(argv)
     return args.func(args)
 
@@ -128,31 +140,58 @@ def _env(args) -> Env:
     return Env(args.cwd or os.getcwd())
 
 
+def _hook_main(argv: list[str]) -> int:
+    """Run a hook invocation; never propagate failures into the agent.
+
+    Anything that goes wrong — handler exceptions, but also argparse errors
+    such as a stale binary being fed an event name it doesn't know yet — is
+    appended to the hook error log and the process still exits 0.
+    """
+    try:
+        args = _build_parser().parse_args(argv)
+        args.func(args)
+    except SystemExit as e:
+        # argparse raises SystemExit(0) for --help; only log real failures.
+        if e.code not in (0, None):
+            _log_hook_failure(argv)
+    except Exception:
+        _log_hook_failure(argv)
+    return 0
+
+
 def _cmd_hook(args) -> int:
-    """Run a hook handler; never propagate failures into the agent."""
+    """Dispatch one lifecycle hook event; ``_hook_main`` shields failures."""
     handlers = {
         "session-start": hooks_mod.session_start,
         "post-tool": hooks_mod.post_tool,
         "session-end": hooks_mod.session_end,
     }
-    try:
-        handlers[args.event](args.agent)
-    except Exception:
-        try:
-            os.makedirs(os.path.dirname(env_mod.HOOK_ERRORS_PATH), exist_ok=True)
-            with open(env_mod.HOOK_ERRORS_PATH, "a", encoding="utf-8") as f:
-                f.write(
-                    "[%s %s --agent %s]\n%s\n"
-                    % (
-                        time.strftime("%Y-%m-%d %H:%M:%S"),
-                        args.event,
-                        args.agent,
-                        traceback.format_exc(),
-                    )
-                )
-        except OSError:
-            pass
+    handlers[args.event](args.agent)
     return 0
+
+
+def _log_hook_failure(argv: list[str]) -> None:
+    """Append the active exception to the hook error log, best effort.
+
+    Hooks are silent by design, so this log is their only failure surface.
+    The file is created owner-only (0o600) because tracebacks can mention
+    config and transcript paths. If even the log write fails, emit one line
+    on stderr — agents ignore hook stderr on exit 0 — rather than failing
+    silently twice in a row.
+    """
+    tb = traceback.format_exc()
+    lines = tb.splitlines()
+    if len(lines) > _TRACEBACK_TAIL_LINES:
+        dropped = len(lines) - _TRACEBACK_TAIL_LINES
+        tb = "\n".join(["... (%d traceback lines truncated) ..." % dropped, *lines[-_TRACEBACK_TAIL_LINES:]])
+    entry = "[%s %s]\n%s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), " ".join(argv), tb)
+    try:
+        os.makedirs(os.path.dirname(env_mod.HOOK_ERRORS_PATH), mode=0o700, exist_ok=True)
+        fd = os.open(env_mod.HOOK_ERRORS_PATH, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        with os.fdopen(fd, "a", encoding="utf-8") as f:
+            f.write(entry)
+    except OSError:
+        print("ostinote: hook failed and the error log %s is unwritable" % env_mod.HOOK_ERRORS_PATH, file=sys.stderr)
 
 
 def _cmd_save(args) -> int:

@@ -385,7 +385,9 @@ def test_cli_hook_failures_are_logged_and_swallowed(tmp_path, monkeypatch):
     """Make hook entrypoints fail closed from the agent's point of view.
 
     Expected: if a hook handler raises, `main()` logs the traceback to the
-    hook error file and still returns 0 so the agent session is not broken.
+    hook error file — created owner-only, since tracebacks can mention config
+    and transcript paths — and still returns 0 so the agent session is not
+    broken.
     """
     from ostinote import cli as cli_mod
 
@@ -398,6 +400,26 @@ def test_cli_hook_failures_are_logged_and_swallowed(tmp_path, monkeypatch):
     assert cli_mod.main(["hook", "post-tool", "--agent", "codex"]) == 0
 
     assert "RuntimeError: boom" in errors.read_text(encoding="utf-8")
+    if os.name == "posix":
+        assert errors.stat().st_mode & 0o777 == 0o600
+
+
+def test_cli_hook_bad_arguments_still_exit_zero(tmp_path, monkeypatch):
+    """Shield hook invocations from argparse failures, not just handler ones.
+
+    Expected: argparse exits 2 on unknown arguments, which Claude Code treats
+    as a blocking hook error — e.g. a stale binary fed an event name a newer
+    install wrote — so for `hook` commands main() logs the failure and returns
+    0 instead.
+    """
+    from ostinote import cli as cli_mod
+
+    errors = tmp_path / "hook-errors.log"
+    monkeypatch.setattr(cli_mod.env_mod, "HOOK_ERRORS_PATH", str(errors))
+
+    assert cli_mod.main(["hook", "no-such-event", "--agent", "codex"]) == 0
+
+    assert "hook no-such-event --agent codex" in errors.read_text(encoding="utf-8")
 
 
 def test_install_preserves_foreign_hooks(tmp_path, monkeypatch):

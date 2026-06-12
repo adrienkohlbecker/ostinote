@@ -25,8 +25,9 @@ from . import config as config_mod
 from . import tzutil
 
 # Hook crash log. Outside any data dir — written when Env construction
-# itself may have failed — and never inside a project.
-HOOK_ERRORS_PATH = os.path.expanduser("~/.ostinote/hook-errors.log")
+# itself may have failed — and never inside a project. Canonicalized so a
+# symlink planted at this path cannot redirect the append elsewhere.
+HOOK_ERRORS_PATH = os.path.realpath(os.path.expanduser("~/.ostinote/hook-errors.log"))
 
 
 def _slugify(path: str) -> str:
