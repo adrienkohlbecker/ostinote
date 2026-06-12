@@ -5,19 +5,19 @@ import pytest
 from ostinote import pipeline as pipeline_mod
 from ostinote.pipeline import _append_core, _last_entry, format_exchanges, parse_consolidation_response
 from ostinote.state import SessionState
-from tests.helpers import codex_assistant, codex_user, model_result, project_env
+from tests.helpers import codex_assistant, codex_user, model_result
 
 # --- Pipeline -------------------------------------------------------------------------
 
 
-def test_run_save_appends_summary_and_advances_state(tmp_path, monkeypatch):
+def test_run_save_appends_summary_and_advances_state(tmp_path, monkeypatch, make_project_env):
     """Run the save pipeline with a fake Codex transcript and fake model.
 
     Expected: `run_save` writes the model summary to `now.md`, records the
     transcript path, advances the session line marker, and sends the user
     message into the prompt.
     """
-    env = project_env(tmp_path, monkeypatch)
+    env = make_project_env()
     transcript = tmp_path / "session.jsonl"
     transcript.write_text(
         codex_user("Add startup memory") + "\n" + codex_assistant("Implemented it.") + "\n",
@@ -41,13 +41,13 @@ def test_run_save_appends_summary_and_advances_state(tmp_path, monkeypatch):
     assert "Add startup memory" in prompts_seen[0]
 
 
-def test_run_save_skip_advances_state_without_writing(tmp_path, monkeypatch):
+def test_run_save_skip_advances_state_without_writing(tmp_path, monkeypatch, make_project_env):
     """Handle a summarizer `SKIP` response as consumed-but-not-written work.
 
     Expected: no `now.md` file is created, but the session line marker advances
     so the same unimportant transcript line is not reconsidered forever.
     """
-    env = project_env(tmp_path, monkeypatch)
+    env = make_project_env()
     transcript = tmp_path / "session.jsonl"
     transcript.write_text(codex_user("Nothing useful") + "\n", encoding="utf-8")
     # A SKIP still consumes transcript lines; the fake model lets us assert that
@@ -69,7 +69,7 @@ def test_run_save_skip_advances_state_without_writing(tmp_path, monkeypatch):
         pytest.param({"force": True}, 2, True, id="force-bypasses-both-gates"),
     ],
 )
-def test_run_save_gating_matrix(tmp_path, monkeypatch, flags, min_human, expect_saved):
+def test_run_save_gating_matrix(tmp_path, monkeypatch, make_project_env, flags, min_human, expect_saved):
     """Exercise the cooldown / min-human / --final / --force gate combinations.
 
     Expected: an active cooldown skips a plain save; `--final` bypasses the
@@ -78,9 +78,7 @@ def test_run_save_gating_matrix(tmp_path, monkeypatch, flags, min_human, expect_
     bypasses both. These gates are the tool's cost control — a regression here
     means either a paid model call per tool use or silently dropped saves.
     """
-    env = project_env(
-        tmp_path,
-        monkeypatch,
+    env = make_project_env(
         {"cooldowns": {"save_seconds": 1000}, "thresholds": {"min_human_messages": min_human}},
     )
     transcript = tmp_path / "session.jsonl"
@@ -107,7 +105,7 @@ def test_run_save_gating_matrix(tmp_path, monkeypatch, flags, min_human, expect_
     assert SessionState.load(env.sessions_dir, "codex", "s1").line == (2 if expect_saved else 0)
 
 
-def test_run_save_dry_prints_extract_without_state_changes(tmp_path, monkeypatch, capsys):
+def test_run_save_dry_prints_extract_without_state_changes(tmp_path, monkeypatch, make_project_env, capsys):
     """Preview the extract with `--dry` and leave every artifact untouched.
 
     Expected: `--dry` ignores the running cooldown, prints the formatted
@@ -115,7 +113,7 @@ def test_run_save_dry_prints_extract_without_state_changes(tmp_path, monkeypatch
     `now.md` nor the session state (`last_attempt_ts` keeps its exact stored
     value), so a dry run never perturbs real save scheduling.
     """
-    env = project_env(tmp_path, monkeypatch, {"cooldowns": {"save_seconds": 1000}})
+    env = make_project_env({"cooldowns": {"save_seconds": 1000}})
     transcript = tmp_path / "session.jsonl"
     transcript.write_text(codex_user("Preview me") + "\n", encoding="utf-8")
     env.ensure_dirs()
@@ -140,13 +138,13 @@ def test_run_save_dry_prints_extract_without_state_changes(tmp_path, monkeypatch
     assert reloaded.last_attempt_ts == stored_ts
 
 
-def test_run_save_hourly_compression_moves_now_into_today(tmp_path, monkeypatch):
+def test_run_save_hourly_compression_moves_now_into_today(tmp_path, monkeypatch, make_project_env):
     """Exercise save followed by hourly compression under the save lock.
 
     Expected: the first fake model response is appended to `now.md`, the second
     compresses that buffer into today's daily file, and `now.md` is emptied.
     """
-    env = project_env(tmp_path, monkeypatch, {"features": {"hourly_compression": True}})
+    env = make_project_env({"features": {"hourly_compression": True}})
     transcript = tmp_path / "session.jsonl"
     transcript.write_text(codex_user("Compress this") + "\n", encoding="utf-8")
     responses = iter(
@@ -166,7 +164,7 @@ def test_run_save_hourly_compression_moves_now_into_today(tmp_path, monkeypatch)
 
 
 @pytest.mark.parametrize("failure", ["error", "empty"], ids=["model-error", "empty-result"])
-def test_run_save_failed_compression_preserves_now(tmp_path, monkeypatch, failure):
+def test_run_save_failed_compression_preserves_now(tmp_path, monkeypatch, make_project_env, failure):
     """Keep the session buffer intact when hourly compression fails.
 
     Expected: the save itself succeeds, and a failing compression call leaves
@@ -174,7 +172,7 @@ def test_run_save_failed_compression_preserves_now(tmp_path, monkeypatch, failur
     buffer truncation must stay strictly after a successful model response, or
     every failed compression would erase uncompressed memory.
     """
-    env = project_env(tmp_path, monkeypatch, {"features": {"hourly_compression": True}})
+    env = make_project_env({"features": {"hourly_compression": True}})
     transcript = tmp_path / "session.jsonl"
     transcript.write_text(codex_user("Compress this") + "\n", encoding="utf-8")
     responses = iter([model_result("## 11:00 | main\nCaptured thing"), failure])
@@ -195,14 +193,14 @@ def test_run_save_failed_compression_preserves_now(tmp_path, monkeypatch, failur
     assert not (tmp_path / "data" / ("today-%s.md" % env.today())).exists()
 
 
-def test_run_consolidation_writes_sections_and_marks_staging_done(tmp_path, monkeypatch):
+def test_run_consolidation_writes_sections_and_marks_staging_done(tmp_path, monkeypatch, make_project_env):
     """Consolidate a past daily memory file with a fake model response.
 
     Expected: recent and archive files are replaced from the parsed sections,
     new core memory text is appended, the prompt includes the staging filename,
     and the processed daily file is renamed to `.done.md`.
     """
-    env = project_env(tmp_path, monkeypatch)
+    env = make_project_env()
     env.ensure_dirs()
     staging = tmp_path / "data" / "today-2000-01-01.md"
     staging.write_text("## old\nA", encoding="utf-8")
@@ -237,7 +235,7 @@ def test_run_consolidation_writes_sections_and_marks_staging_done(tmp_path, monk
 
 
 @pytest.mark.parametrize("failure", ["error", "empty"], ids=["model-error", "empty-response"])
-def test_run_consolidation_failure_leaves_memory_untouched(tmp_path, monkeypatch, failure):
+def test_run_consolidation_failure_leaves_memory_untouched(tmp_path, monkeypatch, make_project_env, failure):
     """Abort consolidation without consuming staging or rewriting memory.
 
     Expected: when the model errors out or returns an empty response, the run
@@ -245,7 +243,7 @@ def test_run_consolidation_failure_leaves_memory_untouched(tmp_path, monkeypatch
     archive.md are byte-identical — renaming staging before validation would
     silently destroy a day of memory on every bad model reply.
     """
-    env = project_env(tmp_path, monkeypatch)
+    env = make_project_env()
     env.ensure_dirs()
     staging = tmp_path / "data" / "today-2000-01-01.md"
     staging.write_text("## old\nA", encoding="utf-8")
@@ -268,14 +266,14 @@ def test_run_consolidation_failure_leaves_memory_untouched(tmp_path, monkeypatch
     assert not (tmp_path / "data" / "recent.md.bak").exists()
 
 
-def test_run_consolidation_missing_archive_section_keeps_archive(tmp_path, monkeypatch):
+def test_run_consolidation_missing_archive_section_keeps_archive(tmp_path, monkeypatch, make_project_env):
     """Tolerate a reply that only rewrites recent memory.
 
     Expected: a response with a RECENT section but no ARCHIVE section replaces
     recent.md, leaves the existing archive.md unchanged rather than blanking
     it, and still consumes the staging file.
     """
-    env = project_env(tmp_path, monkeypatch)
+    env = make_project_env()
     env.ensure_dirs()
     staging = tmp_path / "data" / "today-2000-01-01.md"
     staging.write_text("## old\nA", encoding="utf-8")
@@ -294,14 +292,14 @@ def test_run_consolidation_missing_archive_section_keeps_archive(tmp_path, monke
     assert (tmp_path / "data" / "today-2000-01-01.done.md").exists()
 
 
-def test_run_save_rejects_malformed_header(tmp_path, monkeypatch):
+def test_run_save_rejects_malformed_header(tmp_path, monkeypatch, make_project_env):
     """Refuse to append a summary whose first line is not a journal header.
 
     Expected: `run_save` returns 1, nothing is written to `now.md`, and the
     session line marker is not persisted, so the same transcript lines are
     retried on the next save instead of being lost.
     """
-    env = project_env(tmp_path, monkeypatch)
+    env = make_project_env()
     transcript = tmp_path / "session.jsonl"
     transcript.write_text(codex_user("Do a thing") + "\n", encoding="utf-8")
     monkeypatch.setattr(

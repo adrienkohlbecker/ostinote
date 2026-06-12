@@ -1,6 +1,5 @@
 import json
 import os
-import re
 import tomllib
 
 import pytest
@@ -8,6 +7,7 @@ import pytest
 from ostinote import doctor as doctor_mod
 from ostinote import install as install_mod
 from ostinote.env import Env
+from tests.helpers import expected_slug
 
 # --- Installer -------------------------------------------------------------------------
 
@@ -135,7 +135,7 @@ def test_codex_install_adds_memory_dir_to_writable_roots(tmp_path, installer_env
     # config, because other sessions may still need the memory directory.
     install_mod.install("codex", "project", root, remove=True)
 
-    expected = "~/.ostinote/projects/%s" % re.sub(r"[^a-zA-Z0-9]", "-", root)
+    expected = "~/.ostinote/projects/%s" % expected_slug(root)
     text = config.read_text(encoding="utf-8")
     data = tomllib.loads(text)
     sandbox = data["sandbox_workspace_write"]

@@ -8,7 +8,67 @@ import pytest
 from ostinote.agents import get_agent
 from ostinote.agents.claude import ClaudeAgent
 from ostinote.agents.codex import CodexAgent
-from tests.helpers import claude_line, codex_item
+from tests.helpers import age_file, claude_line, codex_assistant, codex_item, codex_user, expected_slug
+
+
+@pytest.fixture
+def claude_transcript(tmp_path):
+    """Canonical noisy Claude transcript: real turns mixed with injected noise.
+
+    Deliberately includes one of each line the parser must drop — an injected
+    system reminder, a summary line, a meta message, and a tool_result user
+    line — around two real human turns and one assistant turn with tool calls,
+    so parse tests prove filtering and extraction together.
+    """
+    lines = [
+        claude_line("user", "Fix the login bug"),
+        claude_line("user", "<system-reminder>injected</system-reminder>"),
+        claude_line("summary", "ignored"),
+        claude_line(
+            "assistant",
+            [
+                {"type": "text", "text": "Looking at auth.py now."},
+                {"type": "tool_use", "name": "Read", "input": {"file_path": "/x/auth.py"}},
+                {"type": "tool_use", "name": "Bash", "input": {"command": "pytest -x tests/"}},
+            ],
+        ),
+        claude_line("user", "ship it", is_meta=True),
+        claude_line("user", [{"type": "tool_result", "content": "big output"}]),
+        claude_line("user", "looks good, thanks"),
+    ]
+    path = tmp_path / "session-1.jsonl"
+    path.write_text("\n".join(lines) + "\n")
+    return str(path)
+
+
+@pytest.fixture
+def codex_transcript(tmp_path):
+    """Canonical noisy Codex rollout: conversation plus every skippable shape.
+
+    Mixes the lines the parser must ignore — session_meta, an injected
+    AGENTS.md user message, a non-conversation event_msg, an empty reasoning
+    item, and a function_call_output — with one real user request, one tool
+    call, and one assistant answer.
+    """
+    lines = [
+        json.dumps({"type": "session_meta", "payload": {"id": "abc", "cwd": "/proj"}}),
+        codex_user("# AGENTS.md instructions for /proj\nstuff"),
+        codex_user("Investigate the reboot delays"),
+        json.dumps({"type": "event_msg", "payload": {"type": "noise"}}),
+        codex_item({"type": "reasoning", "summary": []}),
+        codex_item(
+            {
+                "type": "function_call",
+                "name": "exec_command",
+                "arguments": json.dumps({"cmd": "journalctl -b -1"}),
+            }
+        ),
+        codex_item({"type": "function_call_output", "output": "logs..."}),
+        codex_assistant("zram delayed shutdown by 90s."),
+    ]
+    path = tmp_path / "rollout-1.jsonl"
+    path.write_text("\n".join(lines) + "\n")
+    return str(path)
 
 
 def test_claude_parse(claude_transcript):
@@ -160,7 +220,7 @@ def test_agent_registry():
 # --- Transcript discovery --------------------------------------------------------
 
 
-def test_claude_find_latest_transcript(tmp_path, monkeypatch):
+def test_claude_find_latest_transcript(tmp_path, isolate_home):
     """Pick the newest session file from the project's Claude slug directory.
 
     Expected: among several transcripts in `~/.claude/projects/<slug>/`, the
@@ -168,21 +228,18 @@ def test_claude_find_latest_transcript(tmp_path, monkeypatch):
     when invoked by hand — and a project with no session directory returns
     None instead of raising.
     """
-    home = tmp_path / "home"
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("USERPROFILE", str(home))
     cwd = str(tmp_path / "proj")
     # Claude Code's documented slug scheme (drive letter lowercased on Windows).
     if os.name == "nt" and re.match(r"^[A-Za-z]:", cwd):
         cwd_for_slug = cwd[0].lower() + cwd[1:]
     else:
         cwd_for_slug = cwd
-    sdir = home / ".claude" / "projects" / re.sub(r"[^a-zA-Z0-9]", "-", cwd_for_slug)
+    sdir = isolate_home / ".claude" / "projects" / expected_slug(cwd_for_slug)
     sdir.mkdir(parents=True)
     for name, age in (("older.jsonl", 300), ("newest.jsonl", 100)):
         path = sdir / name
         path.write_text("{}\n", encoding="utf-8")
-        os.utime(path, (time.time() - age, time.time() - age))
+        age_file(path, age)
 
     assert ClaudeAgent().find_latest_transcript(cwd) == str(sdir / "newest.jsonl")
     assert ClaudeAgent().find_latest_transcript(str(tmp_path / "no-sessions")) is None
@@ -207,7 +264,7 @@ def test_codex_find_latest_transcript(tmp_path, monkeypatch):
     def rollout(name, first_line, age):
         path = day_dir / name
         path.write_text(first_line + "\n", encoding="utf-8")
-        os.utime(path, (time.time() - age, time.time() - age))
+        age_file(path, age)
         return str(path)
 
     def meta(meta_cwd):

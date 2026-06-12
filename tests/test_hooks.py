@@ -6,7 +6,7 @@ import pytest
 
 from ostinote import hooks as hooks_mod
 from ostinote.state import SessionState
-from tests.helpers import hook_stdin, project_env
+from tests.helpers import age_file, hook_stdin
 
 # --- SessionStart ----------------------------------------------------------------------
 
@@ -15,14 +15,14 @@ from tests.helpers import hook_stdin, project_env
     "source,injected",
     [("startup", True), ("clear", True), ("", True), ("resume", False), ("compact", False)],
 )
-def test_session_start_source_filter(tmp_path, monkeypatch, capsys, source, injected):
+def test_session_start_source_filter(tmp_path, monkeypatch, make_project_env, capsys, source, injected):
     """Inject memory only for fresh starts, not resumes or compactions.
 
     Expected: startup, clear, and missing-source hook payloads print memory
     context; resume and compact payloads print nothing to avoid duplicated
     context in an already-running conversation.
     """
-    env = project_env(tmp_path, monkeypatch, {"features": {"recovery": False, "consolidation": False}})
+    env = make_project_env({"features": {"recovery": False, "consolidation": False}})
     (tmp_path / "data").mkdir()
     (tmp_path / "data" / "recent.md").write_text("# Recent\n\nsomething happened\n")
 
@@ -39,13 +39,15 @@ def test_session_start_source_filter(tmp_path, monkeypatch, capsys, source, inje
         assert out == ""
 
 
-def test_session_start_queues_consolidation_without_injecting_on_resume(tmp_path, monkeypatch, capsys):
+def test_session_start_queues_consolidation_without_injecting_on_resume(
+    tmp_path, monkeypatch, make_project_env, capsys
+):
     """Start consolidation on resume without re-injecting memory context.
 
     Expected: a past `today-*.md` file queues `ostinote consolidate`, but because
     the source is `resume`, stdout stays empty.
     """
-    env = project_env(tmp_path, monkeypatch, {"features": {"recovery": False}})
+    env = make_project_env({"features": {"recovery": False}})
     env.ensure_dirs()
     (tmp_path / "data" / "today-2000-01-01.md").write_text("old", encoding="utf-8")
     queued = []
@@ -60,13 +62,13 @@ def test_session_start_queues_consolidation_without_injecting_on_resume(tmp_path
     assert capsys.readouterr().out == ""
 
 
-def test_session_start_truncates_oversized_memory(tmp_path, monkeypatch, capsys):
+def test_session_start_truncates_oversized_memory(tmp_path, monkeypatch, make_project_env, capsys):
     """Cap per-file memory injection so a runaway file cannot flood context.
 
     Expected: an oversized recent.md is injected tail-first with a truncation
     marker, keeping the newest entries and dropping the oldest.
     """
-    env = project_env(tmp_path, monkeypatch, {"features": {"recovery": False, "consolidation": False}})
+    env = make_project_env({"features": {"recovery": False, "consolidation": False}})
     env.ensure_dirs()
     body = "OLD-HEAD\n" + ("x" * 200_000) + "\nNEW-TAIL"
     (tmp_path / "data" / "recent.md").write_text(body, encoding="utf-8")
@@ -83,14 +85,14 @@ def test_session_start_truncates_oversized_memory(tmp_path, monkeypatch, capsys)
 # --- PostToolUse -----------------------------------------------------------------------
 
 
-def test_post_tool_registers_session_and_queues_save(tmp_path, monkeypatch):
+def test_post_tool_registers_session_and_queues_save(tmp_path, monkeypatch, make_project_env):
     """Queue a background save after enough new transcript lines appear.
 
     Expected: `post_tool` records the transcript path for recovery and queues
     the exact `save --agent codex ...` command instead of running the heavy save
     inline inside the hook.
     """
-    env = project_env(tmp_path, monkeypatch)
+    env = make_project_env()
     transcript = tmp_path / "session.jsonl"
     transcript.write_text("{}\n{}\n{}\n", encoding="utf-8")
     queued = []
@@ -117,14 +119,14 @@ def test_post_tool_registers_session_and_queues_save(tmp_path, monkeypatch):
     ]
 
 
-def test_post_tool_skips_small_delta(tmp_path, monkeypatch):
+def test_post_tool_skips_small_delta(tmp_path, monkeypatch, make_project_env):
     """Queue nothing when too few new transcript lines have accumulated.
 
     Expected: with the delta at or below `delta_lines_trigger`, `post_tool`
     still registers the session for recovery but spawns no save — this gate is
     what keeps hooks from spawning a paid model call on every tool use.
     """
-    env = project_env(tmp_path, monkeypatch, {"thresholds": {"delta_lines_trigger": 10}})
+    env = make_project_env({"thresholds": {"delta_lines_trigger": 10}})
     transcript = tmp_path / "session.jsonl"
     transcript.write_text("{}\n{}\n{}\n", encoding="utf-8")
     queued = []
@@ -137,14 +139,14 @@ def test_post_tool_skips_small_delta(tmp_path, monkeypatch):
     assert queued == []
 
 
-def test_post_tool_skips_under_cooldown(tmp_path, monkeypatch):
+def test_post_tool_skips_under_cooldown(tmp_path, monkeypatch, make_project_env):
     """Queue nothing while the per-session save cooldown is still running.
 
     Expected: even with enough new lines, a recent `last_attempt_ts` makes
     `post_tool` return without spawning, so rapid tool use cannot stack up
     background saves faster than the configured cadence.
     """
-    env = project_env(tmp_path, monkeypatch, {"cooldowns": {"save_seconds": 1000}})
+    env = make_project_env({"cooldowns": {"save_seconds": 1000}})
     transcript = tmp_path / "session.jsonl"
     transcript.write_text("{}\n{}\n{}\n", encoding="utf-8")
     env.ensure_dirs()
@@ -161,14 +163,14 @@ def test_post_tool_skips_under_cooldown(tmp_path, monkeypatch):
     assert queued == []
 
 
-def test_hooks_canonicalize_transcript_path(tmp_path, monkeypatch):
+def test_hooks_canonicalize_transcript_path(tmp_path, monkeypatch, make_project_env):
     """Resolve dot-dot segments before paths reach state or subprocesses.
 
     Expected: `post_tool` stores and queues the canonical transcript path, so
     a symlinked or `..`-laden path cannot alias one transcript into two
     session identities.
     """
-    env = project_env(tmp_path, monkeypatch)
+    env = make_project_env()
     transcript = tmp_path / "session.jsonl"
     transcript.write_text("{}\n{}\n{}\n", encoding="utf-8")
     (tmp_path / "sub").mkdir()
@@ -185,14 +187,13 @@ def test_hooks_canonicalize_transcript_path(tmp_path, monkeypatch):
     assert queued and queued[0][queued[0].index("--transcript") + 1] == canonical
 
 
-def test_malformed_hook_input_is_logged(tmp_path, monkeypatch):
+def test_malformed_hook_input_is_logged(tmp_path, monkeypatch, make_project_env):
     """Record undecodable hook payloads instead of failing silently.
 
     Expected: garbage on stdin leaves `post_tool` a no-op but writes an
     `unreadable hook input` diagnostic to the project log.
     """
-    env = project_env(tmp_path, monkeypatch)
-    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    env = make_project_env()
     monkeypatch.chdir(tmp_path / "proj")  # the fallback env resolves from cwd
     hook_stdin(monkeypatch, "not json")
 
@@ -207,14 +208,14 @@ def test_malformed_hook_input_is_logged(tmp_path, monkeypatch):
 # --- SessionEnd ------------------------------------------------------------------------
 
 
-def test_session_end_queues_final_save_from_transcript_basename(tmp_path, monkeypatch):
+def test_session_end_queues_final_save_from_transcript_basename(tmp_path, monkeypatch, make_project_env):
     """Queue a final save when the hook payload omits `session_id`.
 
     Expected: `session_end` derives the session id from the transcript filename
     and queues a `save ... --final` command so session close captures remaining
     transcript content.
     """
-    env = project_env(tmp_path, monkeypatch)
+    env = make_project_env()
     transcript = tmp_path / "session-abc.jsonl"
     transcript.write_text("{}\n", encoding="utf-8")
     queued = []
@@ -240,14 +241,14 @@ def test_session_end_queues_final_save_from_transcript_basename(tmp_path, monkey
     ]
 
 
-def test_session_end_skips_when_nothing_new(tmp_path, monkeypatch):
+def test_session_end_skips_when_nothing_new(tmp_path, monkeypatch, make_project_env):
     """Skip the final save when the transcript was already saved to its end.
 
     Expected: with the saved line marker equal to the transcript line count,
     `session_end` spawns nothing — this is what makes Codex's turn-scoped Stop
     hook cheap when a turn produced no unsaved content.
     """
-    env = project_env(tmp_path, monkeypatch)
+    env = make_project_env()
     transcript = tmp_path / "session-abc.jsonl"
     transcript.write_text("{}\n{}\n", encoding="utf-8")
     env.ensure_dirs()
@@ -267,13 +268,13 @@ def test_session_end_skips_when_nothing_new(tmp_path, monkeypatch):
 # --- Spawn -----------------------------------------------------------------------------
 
 
-def test_spawn_failure_is_logged_not_raised(tmp_path, monkeypatch):
+def test_spawn_failure_is_logged_not_raised(tmp_path, monkeypatch, make_project_env):
     """Keep hooks alive when the background subprocess cannot start.
 
     Expected: a missing ostinote executable produces a `spawn failed` line in
     the daily log instead of raising into the hook handler.
     """
-    env = project_env(tmp_path, monkeypatch)
+    env = make_project_env()
     monkeypatch.setattr(hooks_mod, "self_command", lambda: [str(tmp_path / "missing-exe")])
 
     hooks_mod.spawn(env, ["save", "--agent", "codex"])
@@ -283,14 +284,14 @@ def test_spawn_failure_is_logged_not_raised(tmp_path, monkeypatch):
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX file modes")
-def test_spawn_creates_owner_only_background_log(tmp_path, monkeypatch):
+def test_spawn_creates_owner_only_background_log(tmp_path, monkeypatch, make_project_env):
     """Keep the background log private — it can quote transcript content.
 
     Expected: a successful spawn creates `logs/background.log` with mode 0o600,
     so summarized transcript fragments are not world-readable on shared
     machines.
     """
-    env = project_env(tmp_path, monkeypatch)
+    env = make_project_env()
     # Stub process creation: a real detached child would be reported by pytest
     # as an unreaped Popen, and the chmod under test happens before Popen runs.
     launched = []
@@ -324,8 +325,7 @@ def test_recovery_uses_saved_line_not_failed_attempt_time(tmp_path, monkeypatch)
     transcript = tmp_path / "session.jsonl"
     transcript.write_text("{}\n{}\n{}\n")
     # Recovery deliberately ignores transcripts that still look active.
-    idle_mtime = time.time() - hooks_mod._RECOVERY_ACTIVE_WINDOW - 1
-    os.utime(transcript, (idle_mtime, idle_mtime))
+    age_file(transcript, hooks_mod._RECOVERY_ACTIVE_WINDOW + 1)
 
     env = _recovery_env(tmp_path)
     state = SessionState.load(env.sessions_dir, "codex", "session")
@@ -351,8 +351,7 @@ def test_recovery_skips_fully_saved_transcripts(tmp_path, monkeypatch):
     transcript = tmp_path / "session.jsonl"
     transcript.write_text("{}\n{}\n")
     # Make the transcript old enough to pass the "not actively changing" gate.
-    idle_mtime = time.time() - hooks_mod._RECOVERY_ACTIVE_WINDOW - 1
-    os.utime(transcript, (idle_mtime, idle_mtime))
+    age_file(transcript, hooks_mod._RECOVERY_ACTIVE_WINDOW + 1)
 
     env = _recovery_env(tmp_path)
     state = SessionState.load(env.sessions_dir, "codex", "session")
@@ -405,8 +404,7 @@ def test_recovery_caps_queued_sessions_to_newest(tmp_path, monkeypatch):
         transcript = tmp_path / ("session-%d.jsonl" % i)
         transcript.write_text("{}\n{}\n")
         # All idle, with distinct ages: session-0 oldest, session-4 newest.
-        mtime = time.time() - hooks_mod._RECOVERY_ACTIVE_WINDOW - 1000 + i
-        os.utime(transcript, (mtime, mtime))
+        age_file(transcript, hooks_mod._RECOVERY_ACTIVE_WINDOW + 1000 - i)
         state = SessionState.load(env.sessions_dir, "codex", "session-%d" % i)
         state.transcript_path = str(transcript)
         state.save()

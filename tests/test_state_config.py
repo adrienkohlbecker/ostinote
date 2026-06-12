@@ -1,12 +1,12 @@
 import json
 import os
-import re
 
 import pytest
 
 from ostinote import config as config_mod
 from ostinote.env import Env, _slugify
 from ostinote.state import PidLock, SessionState
+from tests.helpers import expected_slug
 
 # --- State and locks -------------------------------------------------------------------
 
@@ -114,10 +114,10 @@ def test_data_dir_slug_placeholder(tmp_path, monkeypatch):
 
     # claude-remember / Claude Code slug scheme: leading dash kept.
     # Windows paths start with drive letters instead.
-    expected_slug = re.sub(r"[^a-zA-Z0-9]", "-", str(proj))
+    slug = expected_slug(str(proj))
     if os.name != "nt":
-        assert expected_slug.startswith("-")
-    assert env.data_dir == str(store / expected_slug)
+        assert slug.startswith("-")
+    assert env.data_dir == str(store / slug)
 
 
 def test_config_legacy_remember_keys(tmp_path, monkeypatch):
@@ -200,7 +200,6 @@ def test_env_rejects_project_data_dir_escaping_repo(tmp_path, monkeypatch):
     ~/.ostinote (an arbitrary-write / Codex-sandbox-escape attempt) is ignored,
     and Env falls back to the default `~/.ostinote/projects/<slug>` layout.
     """
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", str(tmp_path / "no-user.json"))
     proj = tmp_path / "proj"
     (proj / ".ostinote").mkdir(parents=True)
@@ -223,7 +222,6 @@ def test_env_rejects_project_data_dir_symlink_escape(tmp_path, monkeypatch):
     back to the default slug layout — a check on the unresolved path would
     grant the cloned repo an arbitrary write target.
     """
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", str(tmp_path / "no-user.json"))
     proj = tmp_path / "proj"
     (proj / ".ostinote").mkdir(parents=True)
@@ -244,7 +242,6 @@ def test_env_allows_project_data_dir_inside_repo(tmp_path, monkeypatch):
     Expected: a relative `.ostinote` data_dir resolves under the project root
     and is kept, because it does not escape the repo.
     """
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", str(tmp_path / "no-user.json"))
     proj = tmp_path / "proj"
     (proj / ".ostinote").mkdir(parents=True)
@@ -260,7 +257,6 @@ def test_env_trusts_user_data_dir_anywhere(tmp_path, monkeypatch):
     Expected: a user-config data_dir outside the repo and ~/.ostinote is used
     as-is — the containment check only applies to the untrusted project layer.
     """
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     user_cfg = tmp_path / "user.json"
     user_cfg.write_text(json.dumps({"data_dir": str(tmp_path / "elsewhere")}))
     monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", str(user_cfg))

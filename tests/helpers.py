@@ -1,9 +1,11 @@
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import textwrap
+import time
 
 from ostinote import config as config_mod
 from ostinote import summarize
@@ -88,26 +90,41 @@ def project_env(tmp_path, monkeypatch, extra_cfg=None):
     return Env(str(proj))
 
 
-def model_result(text, input_tokens=10, output_tokens=3, cache_tokens=0, cost=0.0):
+def model_result(text):
     """Build a fake summarizer result for pipeline tests.
 
-    Skip detection is derived through the SUT's own parser instead of
-    re-implementing its heuristic, so the fixture cannot drift from how the
-    pipeline really classifies a SKIP response.
+    Token counts are fixed — no caller asserts on them. Skip detection is
+    derived through the SUT's own parser instead of re-implementing its
+    heuristic, so the fixture cannot drift from how the pipeline really
+    classifies a SKIP response.
     """
     return summarize.ModelResult(
         text=text,
-        tokens=summarize.TokenUsage(input=input_tokens, output=output_tokens, cache=cache_tokens, cost_usd=cost),
+        tokens=summarize.TokenUsage(input=10, output=3, cache=0, cost_usd=0.0),
         is_skip=summarize.parse_response(text).is_skip,
     )
 
 
-def installer_home(tmp_path, monkeypatch):
-    home = tmp_path / "home"
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("USERPROFILE", str(home))  # Windows uses USERPROFILE, not HOME
-    monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", str(home / ".ostinote/config.json"))
-    return home
+def expected_slug(path):
+    """Independent pin of the dashed-path slug scheme (claude-remember style).
+
+    Deliberately re-implemented rather than imported from the SUT, so a slug
+    regression cannot self-confirm. Claude Code's transcript directories
+    additionally lowercase Windows drive letters before slugging; tests
+    pinning that discovery scheme apply the lowering themselves.
+    """
+    return re.sub(r"[^a-zA-Z0-9]", "-", path)
+
+
+def age_file(path, seconds):
+    """Backdate a file's mtime by ``seconds``.
+
+    Recovery and transcript-discovery tests use this to make a file look
+    idle or older than a sibling; naming the operation keeps the window
+    arithmetic at the call site, next to the gate it exercises.
+    """
+    mtime = time.time() - seconds
+    os.utime(path, (mtime, mtime))
 
 
 def deep_update(base, override):
