@@ -18,15 +18,18 @@ the same ``SKILL.md``, invoked as ``/ostinote`` in Claude Code and
 
 from __future__ import annotations
 
+import contextlib
+import copy
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
 import tempfile
 import tomllib
 
-from .env import Env
+from . import env as env_mod
 from .hooks import self_command
 
 ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
@@ -130,10 +133,8 @@ def _write_text_atomic(path: str, text: str) -> None:
             f.write(text)
         os.replace(tmp, path)
     except Exception:
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(tmp)
-        except OSError:
-            pass
         raise
 
 
@@ -232,40 +233,122 @@ def install(agent: str, scope: str, project_root: str, remove: bool = False) -> 
 
 def _ensure_codex_writable_root(project_root: str) -> str:
     config_path = os.path.expanduser("~/.codex/config.toml")
-    root = _home_relative(Env(project_root).data_dir)
-    config = _read_toml(config_path)
-    sandbox = config.get("sandbox_workspace_write")
-    if sandbox is None:
-        sandbox = {}
-        config["sandbox_workspace_write"] = sandbox
-    elif not isinstance(sandbox, dict):
-        raise _ConfigError("invalid TOML in %s: sandbox_workspace_write must be a table" % config_path)
+    # Use the validated data dir: a project config that tried to redirect it
+    # outside the repo / ~/.ostinote is rejected, so we never grant the Codex
+    # sandbox write access to an attacker-chosen path.
+    root = _home_relative(env_mod.data_dir_for(project_root))
+    original = _read_text_or_empty(config_path)
+    config = _parse_toml(config_path, original)
 
-    roots = sandbox.get("writable_roots")
-    if roots is None:
-        roots = []
-        sandbox["writable_roots"] = roots
-    elif not isinstance(roots, list) or not all(isinstance(item, str) for item in roots):
+    sandbox = config.get("sandbox_workspace_write")
+    if sandbox is not None and not isinstance(sandbox, dict):
+        raise _ConfigError("invalid TOML in %s: sandbox_workspace_write must be a table" % config_path)
+    roots = (sandbox or {}).get("writable_roots")
+    if roots is not None and (not isinstance(roots, list) or not all(isinstance(item, str) for item in roots)):
         raise _ConfigError(
             "invalid TOML in %s: sandbox_workspace_write.writable_roots must be an array of strings" % config_path
         )
-
-    if _root_list_has_value(roots, root):
+    if isinstance(roots, list) and _root_list_has_value(roots, root):
         return "codex writable root already present: %s" % root
 
-    roots.append(root)
-    _write_text_atomic(config_path, _format_toml(config))
+    _write_text_atomic(config_path, _add_writable_root(original, config, root))
     return "codex writable root added: %s" % root
 
 
-def _read_toml(path: str) -> dict:
+def _read_text_or_empty(path: str) -> str:
+    """Read a config file as text. Missing file -> "". Other read errors raise
+    _ConfigError so install fails closed instead of silently rewriting."""
     try:
-        with open(path, "rb") as f:
-            return tomllib.load(f)
+        with open(path, encoding="utf-8") as f:
+            return f.read()
     except FileNotFoundError:
-        return {}
+        return ""
+    except OSError as e:
+        raise _ConfigError("cannot read %s: %s" % (path, e)) from e
+
+
+def _parse_toml(path: str, text: str) -> dict:
+    """Parse TOML text, raising _ConfigError on a decode error (so a corrupt
+    Codex config is reported and left untouched, never overwritten)."""
+    try:
+        return tomllib.loads(text)
     except tomllib.TOMLDecodeError as e:
         raise _ConfigError("invalid TOML in %s: %s" % (path, e)) from e
+
+
+# Matches the start of a `writable_roots = [` array assignment and a
+# `[sandbox_workspace_write]` table header, used to splice in a new entry
+# without disturbing the surrounding text. Best-effort: any mismatch is caught
+# by the re-parse verification in _add_writable_root and falls back to a full
+# reserialize.
+_WRITABLE_ROOTS_OPEN = re.compile(r"writable_roots[ \t]*=[ \t]*\[")
+_SANDBOX_HEADER = re.compile(r"(?m)^[ \t]*\[sandbox_workspace_write\][ \t]*$")
+
+
+def _add_writable_root(original: str, config: dict, root: str) -> str:
+    """Return Codex config text with ``root`` added to writable_roots.
+
+    Prefers a targeted in-place text edit so the user's comments, key order, and
+    spacing survive. The edit is trusted only if re-parsing it yields exactly the
+    original config with ``root`` prepended to writable_roots; otherwise it falls
+    back to regenerating the file from the parsed structure (correct, but
+    formatting is lost). New entries are prepended so the verification and the
+    fallback agree on ordering.
+    """
+    edited = _splice_writable_root(original, root)
+    if edited is not None and _parses_to_expected(edited, config, root):
+        return edited
+    rebuilt = copy.deepcopy(config)
+    sandbox = rebuilt.get("sandbox_workspace_write")
+    if not isinstance(sandbox, dict):
+        sandbox = {}
+        rebuilt["sandbox_workspace_write"] = sandbox
+    existing = sandbox.get("writable_roots")
+    sandbox["writable_roots"] = [root, *existing] if isinstance(existing, list) else [root]
+    return _format_toml(rebuilt)
+
+
+def _splice_writable_root(text: str, root: str) -> str | None:
+    """Insert ``root`` into the config text near an existing writable_roots array
+    or sandbox table, or append a fresh table when neither is present. Returns
+    new text (never validated here — the caller re-parses to confirm)."""
+    elem = _toml_value(root)
+    match = _WRITABLE_ROOTS_OPEN.search(text)
+    if match:
+        # Insert at the head of the array; the trailing comma keeps both inline
+        # ("[]" -> "[X, ]") and multiline arrays valid TOML.
+        cut = match.end()
+        return "%s%s, %s" % (text[:cut], elem, text[cut:])
+    match = _SANDBOX_HEADER.search(text)
+    if match:
+        line_end = text.find("\n", match.end())
+        block = "writable_roots = [%s]\n" % elem
+        if line_end == -1:
+            return "%s\n%s" % (text, block)
+        return "%s%s%s" % (text[: line_end + 1], block, text[line_end + 1 :])
+    body = text.rstrip("\n")
+    block = "[sandbox_workspace_write]\nwritable_roots = [%s]\n" % elem
+    return block if not body else "%s\n\n%s" % (body, block)
+
+
+def _parses_to_expected(text: str, config: dict, root: str) -> bool:
+    """True if ``text`` parses to ``config`` with ``root`` prepended to
+    writable_roots and nothing else changed — the guard that lets us trust a
+    text splice over a structural rebuild."""
+    try:
+        parsed = tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        return False
+    expected = copy.deepcopy(config)
+    sandbox = expected.get("sandbox_workspace_write")
+    if sandbox is None:
+        sandbox = {}
+        expected["sandbox_workspace_write"] = sandbox
+    elif not isinstance(sandbox, dict):
+        return False
+    existing = sandbox.get("writable_roots")
+    sandbox["writable_roots"] = [root, *existing] if isinstance(existing, list) else [root]
+    return parsed == expected
 
 
 def _format_toml(data: dict) -> str:

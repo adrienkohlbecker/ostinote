@@ -480,6 +480,64 @@ def test_codex_install_adds_memory_dir_to_writable_roots(tmp_path, monkeypatch):
     assert "~/already" in sandbox["writable_roots"]
 
 
+def test_codex_install_preserves_config_comments(tmp_path, monkeypatch):
+    """Splice the writable root in without rewriting the user's Codex config.
+
+    Expected: a hand-formatted config.toml keeps its comments and other keys
+    after install, and the memory root is added to the existing array (proving
+    the targeted text edit ran, not the formatting-losing reserialize).
+    """
+    from ostinote import install as install_mod
+
+    home = installer_home(tmp_path, monkeypatch)
+    monkeypatch.setattr(install_mod, "self_command", lambda: ["/usr/bin/ostinote"])
+    root = str(tmp_path / "proj")
+    (tmp_path / "proj").mkdir()
+    config = home / ".codex" / "config.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        '# my codex config\nmodel = "gpt-5"  # keep this comment\n\n'
+        '[sandbox_workspace_write]\nwritable_roots = ["~/already"]\nnetwork_access = true\n',
+        encoding="utf-8",
+    )
+
+    install_mod.install("codex", "project", root)
+
+    text = config.read_text(encoding="utf-8")
+    assert "# my codex config" in text
+    assert "# keep this comment" in text
+    data = tomllib.loads(text)
+    roots = data["sandbox_workspace_write"]["writable_roots"]
+    assert "~/already" in roots and len(roots) == 2
+    assert data["sandbox_workspace_write"]["network_access"] is True
+    assert data["model"] == "gpt-5"
+
+
+def test_codex_install_appends_section_when_absent(tmp_path, monkeypatch):
+    """Append a sandbox table to a config that lacks one, keeping prior keys.
+
+    Expected: a config.toml with no `[sandbox_workspace_write]` table gains one
+    with the memory root while its existing content is preserved verbatim.
+    """
+    from ostinote import install as install_mod
+
+    home = installer_home(tmp_path, monkeypatch)
+    monkeypatch.setattr(install_mod, "self_command", lambda: ["/usr/bin/ostinote"])
+    root = str(tmp_path / "proj")
+    (tmp_path / "proj").mkdir()
+    config = home / ".codex" / "config.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text('# header comment\nmodel = "gpt-5"\n', encoding="utf-8")
+
+    install_mod.install("codex", "project", root)
+
+    text = config.read_text(encoding="utf-8")
+    assert "# header comment" in text
+    data = tomllib.loads(text)
+    assert data["model"] == "gpt-5"
+    assert len(data["sandbox_workspace_write"]["writable_roots"]) == 1
+
+
 def test_codex_install_refuses_invalid_toml(tmp_path, monkeypatch):
     """Fail closed when Codex config TOML cannot be parsed.
 
