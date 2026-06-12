@@ -77,6 +77,26 @@ def test_run_save_skip_advances_state_without_writing(tmp_path, monkeypatch, mak
     assert SessionState.load(env.sessions_dir, "codex", "s1").line == 1
 
 
+def test_run_save_returns_error_for_unreadable_explicit_transcript(tmp_path, monkeypatch, make_project_env):
+    """Fail explicit transcript reads instead of treating them as empty saves.
+
+    Expected: a bad `--transcript` path returns 1, records a diagnostic, and
+    does not create session state that would make the failure look consumed.
+    """
+    env = make_project_env()
+    monkeypatch.setattr(
+        pipeline_mod.summarize,
+        "call_model",
+        lambda _prompt, _cfg: pytest.fail("unreadable transcript must not call the model"),
+    )
+
+    assert pipeline_mod.run_save(env, "codex", "s1", str(tmp_path / "missing.jsonl")) == 1
+
+    logs = list((tmp_path / "data" / "logs").glob("memory-*.log"))
+    assert logs and "cannot read transcript" in logs[0].read_text(encoding="utf-8")
+    assert not os.path.exists(env.sessions_dir) or os.listdir(env.sessions_dir) == []
+
+
 @pytest.mark.parametrize(
     "flags,min_human,expect_saved",
     [

@@ -42,11 +42,11 @@ def test_install_uninstall_idempotent(tmp_path, installer_env):
     install_mod.install("codex", "project", root)  # idempotent
     hooks_file = tmp_path / ".codex" / "hooks.json"
     data = json.loads(hooks_file.read_text())
-    for event in ("SessionStart", "PostToolUse", "Stop"):
+    for event in ("SessionStart", "PostToolUse", "PostToolUseFailure", "Stop"):
         ours = [h for g in data["hooks"][event] for h in g["hooks"]]
         assert len(ours) == 1
         assert "--agent codex" in ours[0]["command"]
-    assert set(data["hooks"]) == {"SessionStart", "PostToolUse", "Stop"}
+    assert set(data["hooks"]) == {"SessionStart", "PostToolUse", "PostToolUseFailure", "Stop"}
 
     install_mod.install("codex", "project", root, remove=True)
     data = json.loads(hooks_file.read_text())
@@ -81,20 +81,23 @@ def test_skill_installed_per_agent_and_scope(tmp_path, installer_env):
 def test_install_session_end_events_per_agent(tmp_path, installer_env):
     """Register the correct final-save hook event for each agent.
 
-    Expected: Claude gets `SessionEnd`, while Codex gets `Stop` mapped to the
-    same `session-end` handler because Codex has no true session-exit hook.
+    Expected: both agents get post-tool success/failure hooks, Claude gets
+    `SessionEnd`, and Codex gets `Stop` mapped to the same `session-end`
+    handler because Codex has no true session-exit hook.
     """
     root = str(tmp_path)
     install_mod.install("claude", "project", root)
     claude = json.loads((tmp_path / ".claude" / "settings.json").read_text())
-    assert set(claude["hooks"]) == {"SessionStart", "PostToolUse", "SessionEnd"}
+    assert set(claude["hooks"]) == {"SessionStart", "PostToolUse", "PostToolUseFailure", "SessionEnd"}
 
     # Codex has no SessionEnd; its turn-scoped Stop maps to the same handler.
     install_mod.install("codex", "project", root)
     codex = json.loads((tmp_path / ".codex" / "hooks.json").read_text())
-    assert set(codex["hooks"]) == {"SessionStart", "PostToolUse", "Stop"}
+    assert set(codex["hooks"]) == {"SessionStart", "PostToolUse", "PostToolUseFailure", "Stop"}
     stop = [h["command"] for g in codex["hooks"]["Stop"] for h in g["hooks"]]
     assert "hook session-end --agent codex" in stop[0]
+    failure = [h["command"] for g in codex["hooks"]["PostToolUseFailure"] for h in g["hooks"]]
+    assert "hook post-tool --agent codex" in failure[0]
 
 
 def test_install_preserves_foreign_hooks(tmp_path, installer_env):

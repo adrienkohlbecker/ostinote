@@ -47,6 +47,8 @@ class CodexAgent(Agent):
         if obj.get("type") != "response_item":
             return []
         payload = obj.get("payload", {})
+        if not isinstance(payload, dict):
+            return []
         ptype = payload.get("type")
 
         if ptype == "message":
@@ -63,8 +65,14 @@ class CodexAgent(Agent):
             return [("AGENT", _format_function_call(payload))]
         if ptype == "custom_tool_call":
             name = payload.get("name", "?")
-            detail = Agent._truncate(str(payload.get("input", "")))
+            detail = Agent._truncate(Agent._redact_sensitive(str(payload.get("input", ""))))
             return [("AGENT", "[TOOL: %s %s]" % (name, detail))]
+        if ptype == "function_call_output":
+            output = payload.get("output", "")
+            if not isinstance(output, str) or not output.strip():
+                return []
+            detail = Agent._truncate(Agent._redact_sensitive(output), 200)
+            return [("AGENT", "[TOOL_OUTPUT: %s]" % detail)]
         return []
 
     def find_latest_transcript(self, cwd: str) -> str | None:
@@ -88,11 +96,40 @@ class CodexAgent(Agent):
             try:
                 with open(path, encoding="utf-8", errors="replace") as f:
                     meta = json.loads(f.readline())
-                if meta.get("type") == "session_meta" and meta.get("payload", {}).get("cwd") == cwd:
+                payload = meta.get("payload", {}) if isinstance(meta, dict) else {}
+                if (
+                    isinstance(meta, dict)
+                    and meta.get("type") == "session_meta"
+                    and isinstance(payload, dict)
+                    and payload.get("cwd") == cwd
+                ):
                     return path
-            except (OSError, json.JSONDecodeError):
+            except (OSError, AttributeError, json.JSONDecodeError):
                 continue
         return None
+
+    def accepts_transcript_path(self, transcript_path: str, cwd: str) -> bool:
+        """Accept hook transcripts only from Codex rollouts for this cwd."""
+        real_root = os.path.realpath(SESSIONS_ROOT)
+        real_path = os.path.realpath(transcript_path)
+        try:
+            inside = os.path.commonpath([real_root, real_path]) == real_root
+        except ValueError:
+            inside = False
+        if not inside or not os.path.isfile(real_path) or not real_path.endswith(".jsonl"):
+            return False
+        try:
+            with open(real_path, encoding="utf-8", errors="replace") as f:
+                meta = json.loads(f.readline())
+        except (OSError, json.JSONDecodeError):
+            return False
+        payload = meta.get("payload", {}) if isinstance(meta, dict) else {}
+        return (
+            isinstance(meta, dict)
+            and meta.get("type") == "session_meta"
+            and isinstance(payload, dict)
+            and payload.get("cwd") == cwd
+        )
 
 
 def _message_texts(content, role: str) -> list[str]:
@@ -104,7 +141,10 @@ def _message_texts(content, role: str) -> list[str]:
             continue
         if block.get("type") not in ("input_text", "output_text", "text"):
             continue
-        text = block.get("text", "").strip()
+        raw_text = block.get("text", "")
+        if not isinstance(raw_text, str):
+            continue
+        text = raw_text.strip()
         if not text:
             continue
         if role == "user" and text.startswith(_INJECTED_PREFIXES):
@@ -132,5 +172,6 @@ def _format_function_call(payload: dict) -> str:
         if isinstance(detail, list):
             detail = " ".join(str(p) for p in detail)
     if detail:
-        return "[TOOL: %s `%s`]" % (name, Agent._truncate(str(detail)))
+        detail = Agent._redact_sensitive(str(detail))
+        return "[TOOL: %s `%s`]" % (name, Agent._truncate(detail))
     return "[TOOL: %s]" % name

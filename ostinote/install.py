@@ -40,6 +40,7 @@ ASSETS_DIR = str(files(__package__).joinpath("assets"))
 _EVENTS = {
     "SessionStart": "session-start",
     "PostToolUse": "post-tool",
+    "PostToolUseFailure": "post-tool",
 }
 # Codex has no session-exit hook event, so its turn-scoped Stop stands in:
 # every turn end is treated as a potential session end (cheap when nothing

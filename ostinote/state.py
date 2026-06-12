@@ -28,6 +28,7 @@ class SessionState:
         self.agent = agent
         self.session_id = session_id
         self.transcript_path = ""
+        self.cwd = ""
         self.line = 0  # raw transcript line offset already saved
         self.last_attempt_ts = 0.0  # last time a save got past the cooldown
         self.last_save_ts = 0.0  # last time content was actually written
@@ -49,6 +50,8 @@ class SessionState:
             # realpath("") resolves to the process cwd.
             raw_path = data.get("transcript_path", "")
             state.transcript_path = os.path.realpath(raw_path) if raw_path else ""
+            raw_cwd = data.get("cwd", "")
+            state.cwd = os.path.abspath(raw_cwd) if isinstance(raw_cwd, str) and raw_cwd else ""
             state.line = int(data.get("line", 0))
             state.last_attempt_ts = float(data.get("last_attempt_ts", 0))
             state.last_save_ts = float(data.get("last_save_ts", 0))
@@ -73,6 +76,7 @@ class SessionState:
                     "agent": self.agent,
                     "session_id": self.session_id,
                     "transcript_path": self.transcript_path,
+                    "cwd": self.cwd,
                     "line": self.line,
                     "last_attempt_ts": self.last_attempt_ts,
                     "last_save_ts": self.last_save_ts,

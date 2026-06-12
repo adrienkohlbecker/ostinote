@@ -18,7 +18,7 @@ import time
 
 from . import prompts, summarize
 from .agents import get_agent
-from .agents.base import Message
+from .agents.base import Message, TranscriptReadError
 from .env import Env
 from .state import PidLock, SessionState, read_ts, write_ts
 
@@ -94,6 +94,7 @@ def run_save(
 def _save_locked(env: Env, agent, session_id: str, transcript_path: str, force: bool, dry: bool, final: bool) -> int:
     state = SessionState.load(env.sessions_dir, agent.name, session_id)
     state.transcript_path = transcript_path
+    state.cwd = env.cwd
 
     # --- Cooldown (per session) ---
     cooldown = env.cfg["cooldowns"]["save_seconds"]
@@ -105,7 +106,11 @@ def _save_locked(env: Env, agent, session_id: str, transcript_path: str, force: 
 
     # --- Extract ---
     env.log("extract", "%s session %s from line %d" % (agent.name, session_id, state.line))
-    messages, total_lines = agent.parse(transcript_path, skip_lines=state.line)
+    try:
+        messages, total_lines = agent.parse(transcript_path, skip_lines=state.line)
+    except TranscriptReadError as exc:
+        env.log("extract", "ERROR: %s" % exc)
+        return 1
     if not dry:
         state.last_attempt_ts = time.time()
         state.save()

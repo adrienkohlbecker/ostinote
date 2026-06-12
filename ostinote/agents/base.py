@@ -3,11 +3,24 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 import sys
 from typing import TypeAlias
 
 # A message is ("HUMAN" | "AGENT", text).
 Message: TypeAlias = tuple[str, str]
+
+_SECRET_PATTERNS = (
+    (re.compile(r"(?i)(authorization\s*:\s*bearer\s+)[^\s'\";]+"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)(authorization\s*:\s*)(?!bearer\b)[^\s'\";]+"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)(--(?:api-key|password|secret|token)\s+)[^\s'\";]+"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)((?:api[_-]?key|password|secret|token)=)[^\s&;]+"), r"\1[REDACTED]"),
+)
+
+
+class TranscriptReadError(OSError):
+    """Raised when an explicit transcript path cannot be opened for parsing."""
 
 
 class Agent:
@@ -35,8 +48,8 @@ class Agent:
         malformed = 0
         try:
             f = open(transcript_path, encoding="utf-8", errors="replace")
-        except OSError:
-            return messages, 0
+        except OSError as exc:
+            raise TranscriptReadError("cannot read transcript %s: %s" % (transcript_path, exc)) from exc
 
         with f:
             for line_num, line in enumerate(f):
@@ -74,7 +87,22 @@ class Agent:
         """
         raise NotImplementedError
 
+    def accepts_transcript_path(self, transcript_path: str, cwd: str) -> bool:
+        """Return whether a hook transcript path plausibly belongs to ``cwd``.
+
+        Adapters with well-known transcript roots override this; the base
+        contract keeps future adapters fail-closed to regular JSONL files.
+        """
+        return os.path.isfile(transcript_path) and transcript_path.endswith(".jsonl")
+
     @staticmethod
     def _truncate(text: str, limit: int = 80) -> str:
         text = " ".join(text.split())
         return text if len(text) <= limit else text[: limit - 1] + "…"
+
+    @staticmethod
+    def _redact_sensitive(text: str) -> str:
+        """Remove common credential shapes before transcript excerpts persist."""
+        for pattern, replacement in _SECRET_PATTERNS:
+            text = pattern.sub(replacement, text)
+        return text

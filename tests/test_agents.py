@@ -81,10 +81,11 @@ def test_claude_parse(claude_transcript):
     messages, total = ClaudeAgent().parse(claude_transcript)
     assert total == 7
     roles = [m[0] for m in messages]
-    assert roles == ["HUMAN", "AGENT", "HUMAN"]
+    assert roles == ["HUMAN", "AGENT", "AGENT", "HUMAN"]
     agent_text = messages[1][1]
     assert "[TOOL: Read auth.py]" in agent_text
     assert "[TOOL: Bash `pytest -x tests/`]" in agent_text
+    assert messages[2] == ("AGENT", "[TOOL_RESULT: big output]")
 
 
 def test_parse_skips_malformed_lines(tmp_path, capsys):
@@ -157,6 +158,7 @@ def test_codex_parse(codex_transcript):
     assert messages == [
         ("HUMAN", "Investigate the reboot delays"),
         ("AGENT", "[TOOL: exec_command `journalctl -b -1`]"),
+        ("AGENT", "[TOOL_OUTPUT: logs...]"),
         ("AGENT", "zram delayed shutdown by 90s."),
     ]
 
@@ -181,8 +183,15 @@ def test_codex_parse_tool_edge_cases(tmp_path):
                         "arguments": json.dumps({"path": ["a.py", "b.py"]}),
                     }
                 ),
+                codex_item(
+                    {
+                        "type": "function_call",
+                        "name": "exec_command",
+                        "arguments": json.dumps({"cmd": "curl -H 'Authorization: Bearer secret-token'"}),
+                    }
+                ),
                 codex_item({"type": "function_call", "name": "mystery", "arguments": "{"}),
-                codex_item({"type": "custom_tool_call", "name": "shell", "input": "x" * 300}),
+                codex_item({"type": "custom_tool_call", "name": "shell", "input": "token=abc " + "x" * 300}),
             ]
         )
         + "\n",
@@ -191,12 +200,59 @@ def test_codex_parse_tool_edge_cases(tmp_path):
 
     messages, total = CodexAgent().parse(str(path))
 
-    assert total == 5
+    assert total == 6
     assert messages[0] == ("AGENT", "[TOOL: apply_patch `a.py b.py`]")
-    assert messages[1] == ("AGENT", "[TOOL: mystery]")
-    assert messages[2][0] == "AGENT"
-    assert messages[2][1].startswith("[TOOL: shell ")
-    assert len(messages[2][1]) < 140
+    assert messages[1] == ("AGENT", "[TOOL: exec_command `curl -H 'Authorization: Bearer [REDACTED]'`]")
+    assert messages[2] == ("AGENT", "[TOOL: mystery]")
+    assert messages[3][0] == "AGENT"
+    assert messages[3][1].startswith("[TOOL: shell token=[REDACTED]")
+    assert len(messages[3][1]) < 140
+
+
+def test_parsers_skip_valid_json_bad_nested_shapes(tmp_path):
+    """Skip schema-drift records without aborting the whole transcript parse.
+
+    Expected: valid JSON with wrong nested shapes contributes no messages, and
+    the following well-shaped line still parses.
+    """
+    claude_path = tmp_path / "claude.jsonl"
+    claude_path.write_text(
+        "\n".join(
+            [
+                json.dumps({"type": "user", "message": None}),
+                claude_line("assistant", [{"type": "text", "text": 123}]),
+                claude_line("user", "still here"),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    codex_path = tmp_path / "codex.jsonl"
+    codex_path.write_text(
+        "\n".join(
+            [
+                json.dumps({"type": "response_item", "payload": []}),
+                codex_item({"type": "message", "role": "user", "content": [{"type": "input_text", "text": 123}]}),
+                codex_user("still here"),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert ClaudeAgent().parse(str(claude_path))[0] == [("HUMAN", "still here")]
+    assert CodexAgent().parse(str(codex_path))[0] == [("HUMAN", "still here")]
+
+
+def test_claude_filter_keeps_user_quoted_skip_markers(tmp_path):
+    """Do not drop a real user prompt just because it quotes a marker string."""
+    path = tmp_path / "session.jsonl"
+    path.write_text(
+        claude_line("user", "Please explain the literal <system-reminder> tag") + "\n",
+        encoding="utf-8",
+    )
+
+    assert ClaudeAgent().parse(str(path))[0] == [("HUMAN", "Please explain the literal <system-reminder> tag")]
 
 
 def test_agent_registry():

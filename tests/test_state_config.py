@@ -39,9 +39,9 @@ def _git(cwd, *args):
 def test_session_state_roundtrip(tmp_path):
     """Persist and reload one session's save position.
 
-    Expected: line number, transcript path, and save timestamp survive a disk
-    round trip, and another agent using the same session id gets a separate
-    state file.
+    Expected: line number, transcript path, session cwd, and save timestamp
+    survive a disk round trip, and another agent using the same session id gets
+    a separate state file.
     """
     sessions = str(tmp_path / "sessions")
     # load() realpaths the stored transcript, so the expectation must be a
@@ -51,10 +51,11 @@ def test_session_state_roundtrip(tmp_path):
     assert s.line == 0
     s.line = 42
     s.transcript_path = transcript
+    s.cwd = str(tmp_path / "proj")
     s.last_save_ts = 123.0
     s.save()
     s2 = SessionState.load(sessions, "codex", "id-1")
-    assert (s2.line, s2.transcript_path, s2.last_save_ts) == (42, transcript, 123.0)
+    assert (s2.line, s2.transcript_path, s2.cwd, s2.last_save_ts) == (42, transcript, str(tmp_path / "proj"), 123.0)
     # Parallel sessions don't collide.
     other = SessionState.load(sessions, "claude", "id-1")
     assert other.line == 0
