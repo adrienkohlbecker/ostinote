@@ -3,6 +3,8 @@ import os
 import re
 import tomllib
 
+import pytest
+
 from ostinote import doctor as doctor_mod
 from ostinote import install as install_mod
 from ostinote.env import Env
@@ -192,6 +194,38 @@ def test_codex_install_appends_section_when_absent(tmp_path, installer_env):
     data = tomllib.loads(text)
     assert data["model"] == "gpt-5"
     assert len(data["sandbox_workspace_write"]["writable_roots"]) == 1
+
+
+@pytest.mark.skipif(os.name == "nt", reason="double quotes are not legal in Windows file names")
+def test_codex_install_escapes_hostile_project_path(tmp_path, installer_env):
+    """Round-trip the writable root for a TOML-hostile project path.
+
+    Expected: an in-repo data_dir under a project directory whose name contains
+    TOML string metacharacters (quote, bracket) lands as exactly one correctly
+    escaped writable root with other sandbox keys untouched — a regression to
+    naive string interpolation would let a crafted directory name inject
+    arbitrary keys (e.g. `network_access`) into the trust-sensitive config.
+    """
+    home = installer_env
+    root_dir = tmp_path / 'we"ird ]dir'
+    (root_dir / ".ostinote").mkdir(parents=True)
+    (root_dir / ".ostinote" / "config.json").write_text(
+        json.dumps({"data_dir": ".ostinote", "share_worktrees": False}), encoding="utf-8"
+    )
+    config = home / ".codex" / "config.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        '[sandbox_workspace_write]\nwritable_roots = ["~/already"]\nnetwork_access = true\n',
+        encoding="utf-8",
+    )
+
+    code, _report = install_mod.install("codex", "project", str(root_dir))
+
+    assert code == 0
+    data = tomllib.loads(config.read_text(encoding="utf-8"))
+    sandbox = data["sandbox_workspace_write"]
+    assert sandbox["writable_roots"] == [os.path.realpath(str(root_dir / ".ostinote")), "~/already"]
+    assert sandbox["network_access"] is True
 
 
 def test_codex_install_refuses_invalid_toml(tmp_path, installer_env):

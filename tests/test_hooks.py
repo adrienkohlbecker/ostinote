@@ -214,6 +214,27 @@ def test_spawn_failure_is_logged_not_raised(tmp_path, monkeypatch):
     assert logs and "spawn failed (save)" in logs[0].read_text(encoding="utf-8")
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX file modes")
+def test_spawn_creates_owner_only_background_log(tmp_path, monkeypatch):
+    """Keep the background log private — it can quote transcript content.
+
+    Expected: a successful spawn creates `logs/background.log` with mode 0o600,
+    so summarized transcript fragments are not world-readable on shared
+    machines.
+    """
+    env = project_env(tmp_path, monkeypatch)
+    # Stub process creation: a real detached child would be reported by pytest
+    # as an unreaped Popen, and the chmod under test happens before Popen runs.
+    launched = []
+    monkeypatch.setattr(hooks_mod.subprocess, "Popen", lambda *args, **kwargs: launched.append(args))
+
+    hooks_mod.spawn(env, ["save"])
+
+    assert launched
+    log = tmp_path / "data" / "logs" / "background.log"
+    assert log.stat().st_mode & 0o777 == 0o600
+
+
 # --- Recovery --------------------------------------------------------------------------
 
 

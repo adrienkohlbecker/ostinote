@@ -2,6 +2,8 @@ import json
 import os
 import re
 
+import pytest
+
 from ostinote import config as config_mod
 from ostinote.env import Env, _slugify
 from ostinote.state import PidLock, SessionState
@@ -209,6 +211,31 @@ def test_env_rejects_project_data_dir_escaping_repo(tmp_path, monkeypatch):
     expected = os.path.realpath(os.path.expanduser("~/.ostinote/projects/%s" % _slugify(str(proj))))
     assert env.data_dir == expected
     assert str(escape) not in env.data_dir
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlink creation may require privileges on Windows")
+def test_env_rejects_project_data_dir_symlink_escape(tmp_path, monkeypatch):
+    """Refuse a project data_dir that escapes the repo through a symlink.
+
+    Expected: `data_dir: "memdir"` where `memdir` is a repo-relative symlink to
+    a directory outside the repo (git preserves absolute symlink targets in
+    clones) is caught by the realpath-based containment check, and Env falls
+    back to the default slug layout — a check on the unresolved path would
+    grant the cloned repo an arbitrary write target.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", str(tmp_path / "no-user.json"))
+    proj = tmp_path / "proj"
+    (proj / ".ostinote").mkdir(parents=True)
+    escape = tmp_path / "evil"
+    escape.mkdir()
+    os.symlink(str(escape), str(proj / "memdir"))
+    (proj / ".ostinote" / "config.json").write_text(json.dumps({"data_dir": "memdir", "share_worktrees": False}))
+
+    env = Env(str(proj))
+    expected = os.path.realpath(os.path.expanduser("~/.ostinote/projects/%s" % _slugify(str(proj))))
+    assert env.data_dir == expected
+    assert os.path.realpath(str(escape)) != env.data_dir
 
 
 def test_env_allows_project_data_dir_inside_repo(tmp_path, monkeypatch):
