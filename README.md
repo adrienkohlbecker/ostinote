@@ -182,9 +182,11 @@ Optional. Create `~/.ostinote/config.json` (applies everywhere) or `<project>/.o
 | `features.hourly_compression` | `true` | The hourly compression step |
 | `features.recovery` | `true` | Rescue unsaved sessions on the next session start |
 | `features.consolidation` | `true` | The daily recent/archive consolidation |
-| `summarizer.command` | claude + haiku | Swap in a different summarizer — any command that reads a prompt on stdin and prints a response |
+| `summarizer.command` | claude + haiku | Swap in a different summarizer — a JSON array of argv strings, e.g. `["llm", "-m", "gpt-5-mini"]`, for any command that reads a prompt on stdin and prints a response. Honored only from `~/.ostinote/config.json` — a cloned repo's config must not be able to choose the executable |
 | `summarizer.timeout` | `120` | Summarizer timeout, seconds |
 | `debug` | `false` | Chatty logs about locks and cooldowns |
+
+Because a per-project config file arrives with a cloned repo, it is treated as untrusted: `summarizer.command` is ignored there (set it in `~/.ostinote/config.json`), and a project-set `data_dir` must stay inside the project or your ostinote home.
 
 `ostinote install` also takes `--project` to register hooks for a single project (in `<project>/.claude/settings.json` / `<project>/.codex/hooks.json`) instead of globally.
 
