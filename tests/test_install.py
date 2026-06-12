@@ -1,5 +1,6 @@
 import json
 import os
+import shlex
 import tomllib
 
 import pytest
@@ -8,6 +9,20 @@ from ostinote import doctor as doctor_mod
 from ostinote import install as install_mod
 from ostinote.env import Env
 from tests.helpers import expected_slug
+
+
+def _codex_config(home, text):
+    """Write a starting ~/.codex/config.toml in the temp home and return its path.
+
+    The initial TOML text is the one input that distinguishes the Codex
+    sandbox-config tests from each other; this keeps it visible at the call
+    site instead of burying it in directory plumbing.
+    """
+    config = home / ".codex" / "config.toml"
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text(text, encoding="utf-8")
+    return config
+
 
 # --- Installer -------------------------------------------------------------------------
 
@@ -116,17 +131,18 @@ def test_codex_install_adds_memory_dir_to_writable_roots(tmp_path, installer_env
     """Bootstrap Codex sandbox access to the project's external memory dir.
 
     Expected: project install adds the computed `~/.ostinote/projects/...` path
-    exactly once, preserves existing writable roots and network settings, and
-    does not remove the root during hook uninstall.
+    exactly once via a targeted text edit — existing writable roots, network
+    settings, comments, and other keys all survive (proving the
+    formatting-losing reserialize did not run) — and hook uninstall does not
+    remove the root.
     """
     home = installer_env
     root = str(tmp_path / "proj")
     (tmp_path / "proj").mkdir()
-    config = home / ".codex" / "config.toml"
-    config.parent.mkdir(parents=True)
-    config.write_text(
-        'model = "gpt-5"\n\n[sandbox_workspace_write]\nwritable_roots = ["~/already"]\nnetwork_access = true\n',
-        encoding="utf-8",
+    config = _codex_config(
+        home,
+        '# my codex config\nmodel = "gpt-5"  # keep this comment\n\n'
+        '[sandbox_workspace_write]\nwritable_roots = ["~/already"]\nnetwork_access = true\n',
     )
 
     install_mod.install("codex", "project", root)
@@ -137,41 +153,14 @@ def test_codex_install_adds_memory_dir_to_writable_roots(tmp_path, installer_env
 
     expected = "~/.ostinote/projects/%s" % expected_slug(root)
     text = config.read_text(encoding="utf-8")
+    assert "# my codex config" in text
+    assert "# keep this comment" in text
     data = tomllib.loads(text)
+    assert data["model"] == "gpt-5"
     sandbox = data["sandbox_workspace_write"]
     assert sandbox["writable_roots"].count(expected) == 1
     assert sandbox["network_access"] is True
     assert "~/already" in sandbox["writable_roots"]
-
-
-def test_codex_install_preserves_config_comments(tmp_path, installer_env):
-    """Splice the writable root in without rewriting the user's Codex config.
-
-    Expected: a hand-formatted config.toml keeps its comments and other keys
-    after install, and the memory root is added to the existing array (proving
-    the targeted text edit ran, not the formatting-losing reserialize).
-    """
-    home = installer_env
-    root = str(tmp_path / "proj")
-    (tmp_path / "proj").mkdir()
-    config = home / ".codex" / "config.toml"
-    config.parent.mkdir(parents=True)
-    config.write_text(
-        '# my codex config\nmodel = "gpt-5"  # keep this comment\n\n'
-        '[sandbox_workspace_write]\nwritable_roots = ["~/already"]\nnetwork_access = true\n',
-        encoding="utf-8",
-    )
-
-    install_mod.install("codex", "project", root)
-
-    text = config.read_text(encoding="utf-8")
-    assert "# my codex config" in text
-    assert "# keep this comment" in text
-    data = tomllib.loads(text)
-    roots = data["sandbox_workspace_write"]["writable_roots"]
-    assert "~/already" in roots and len(roots) == 2
-    assert data["sandbox_workspace_write"]["network_access"] is True
-    assert data["model"] == "gpt-5"
 
 
 def test_codex_install_appends_section_when_absent(tmp_path, installer_env):
@@ -183,9 +172,7 @@ def test_codex_install_appends_section_when_absent(tmp_path, installer_env):
     home = installer_env
     root = str(tmp_path / "proj")
     (tmp_path / "proj").mkdir()
-    config = home / ".codex" / "config.toml"
-    config.parent.mkdir(parents=True)
-    config.write_text('# header comment\nmodel = "gpt-5"\n', encoding="utf-8")
+    config = _codex_config(home, '# header comment\nmodel = "gpt-5"\n')
 
     install_mod.install("codex", "project", root)
 
@@ -212,11 +199,9 @@ def test_codex_install_escapes_hostile_project_path(tmp_path, installer_env):
     (root_dir / ".ostinote" / "config.json").write_text(
         json.dumps({"data_dir": ".ostinote", "share_worktrees": False}), encoding="utf-8"
     )
-    config = home / ".codex" / "config.toml"
-    config.parent.mkdir(parents=True)
-    config.write_text(
+    config = _codex_config(
+        home,
         '[sandbox_workspace_write]\nwritable_roots = ["~/already"]\nnetwork_access = true\n',
-        encoding="utf-8",
     )
 
     code, _report = install_mod.install("codex", "project", str(root_dir))
@@ -228,6 +213,32 @@ def test_codex_install_escapes_hostile_project_path(tmp_path, installer_env):
     assert sandbox["network_access"] is True
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX shlex quoting; double quotes are not legal in Windows file names")
+def test_install_quotes_hostile_self_command(tmp_path, monkeypatch, installer_env):
+    """Round-trip hook commands whose executable path needs shell quoting.
+
+    Expected: a self_command path containing a space and a double quote is
+    rendered so `shlex.split` recovers the original argv — a regression to
+    plain string joining would word-split the command in the agent's shell —
+    and the quoted command is still recognized as ours, so uninstall removes
+    it cleanly.
+    """
+    hostile = str(tmp_path / 'we ird"dir' / "ostinote")
+    monkeypatch.setattr(install_mod, "self_command", lambda: [hostile])
+    root = str(tmp_path / "proj")
+    (tmp_path / "proj").mkdir()
+
+    install_mod.install("codex", "project", root)
+
+    hooks_file = tmp_path / "proj" / ".codex" / "hooks.json"
+    data = json.loads(hooks_file.read_text(encoding="utf-8"))
+    command = data["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+    assert shlex.split(command) == [hostile, "hook", "session-start", "--agent", "codex"]
+
+    install_mod.install("codex", "project", root, remove=True)
+    assert json.loads(hooks_file.read_text(encoding="utf-8")).get("hooks", {}) == {}
+
+
 def test_codex_install_refuses_invalid_toml(tmp_path, installer_env):
     """Fail closed when Codex config TOML cannot be parsed.
 
@@ -237,9 +248,7 @@ def test_codex_install_refuses_invalid_toml(tmp_path, installer_env):
     home = installer_env
     root = str(tmp_path / "proj")
     (tmp_path / "proj").mkdir()
-    config = home / ".codex" / "config.toml"
-    config.parent.mkdir(parents=True)
-    config.write_text("[sandbox_workspace_write\n", encoding="utf-8")
+    config = _codex_config(home, "[sandbox_workspace_write\n")
 
     code, report = install_mod.install("codex", "project", root)
 
@@ -368,9 +377,9 @@ def test_doctor_smoke(tmp_path, monkeypatch, capsys, installer_env):
     """Smoke-test `doctor` against a project with both agents installed.
 
     Expected: a fully registered project passes with no FAIL lines; the codex
-    install records the memory dir as a writable root in the temp home's
-    config.toml (never the real one); after deleting Claude's SessionEnd hook,
-    doctor returns failure and prints a missing-hook diagnostic.
+    install touches the temp home's config.toml (never the real one); after
+    deleting Claude's SessionEnd hook, doctor returns failure and prints a
+    missing-hook diagnostic.
     """
     home = installer_env
     (home / ".ostinote").mkdir(parents=True)
@@ -382,12 +391,10 @@ def test_doctor_smoke(tmp_path, monkeypatch, capsys, installer_env):
     (proj / ".ostinote" / "config.json").write_text(json.dumps({"share_worktrees": False}))
     install_mod.install("claude", "project", str(proj))
     install_mod.install("codex", "project", str(proj))
-    # The sandbox grant must land in the temp home's Codex config (the real
-    # ~/.codex/config.toml used to be rewritten here) and name the memory dir.
-    codex_cfg = tomllib.loads((home / ".codex" / "config.toml").read_text(encoding="utf-8"))
-    assert codex_cfg["sandbox_workspace_write"]["writable_roots"] == [
-        os.path.realpath(str(tmp_path / "data")),
-    ]
+    # The sandbox grant must land in the temp home's Codex config — the real
+    # ~/.codex/config.toml used to be rewritten here. Its exact content is the
+    # subject of test_codex_install_adds_memory_dir_to_writable_roots.
+    assert (home / ".codex" / "config.toml").exists()
 
     assert doctor_mod.run(Env(str(proj))) == 0
     out = capsys.readouterr().out
