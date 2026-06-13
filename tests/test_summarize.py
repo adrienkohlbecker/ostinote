@@ -1,5 +1,6 @@
 import json
 import subprocess
+import tempfile
 import types
 
 import pytest
@@ -9,7 +10,7 @@ from ostinote import summarize
 _OK_JSON = json.dumps({"result": "ok", "usage": {}})
 
 
-def _fake_run(captured, returncode=0, stdout=_OK_JSON, exc=None):
+def _fake_run(captured, returncode=0, stdout=_OK_JSON, stderr="boom-details", exc=None):
     """Build a subprocess.run stand-in that records its invocation."""
 
     def fake_run(cmd, **kwargs):
@@ -17,7 +18,7 @@ def _fake_run(captured, returncode=0, stdout=_OK_JSON, exc=None):
         captured["kwargs"] = kwargs
         if exc is not None:
             raise exc
-        return types.SimpleNamespace(returncode=returncode, stdout=stdout, stderr="boom-details")
+        return types.SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
 
     return fake_run
 
@@ -65,6 +66,61 @@ def test_call_model_normalizes_failures_to_runtime_error(monkeypatch, kwargs, ma
 
     with pytest.raises(RuntimeError, match=match):
         summarize.call_model("hi", cfg)
+
+
+def test_call_model_redacts_nonzero_stderr(monkeypatch):
+    """Redact common credential shapes from summarizer failure text.
+
+    Expected: stderr is still included enough to debug the failing command, but
+    bearer tokens and key/value secrets are removed before RuntimeError reaches
+    the pipeline logs.
+    """
+    captured = {}
+    monkeypatch.setattr(
+        summarize.subprocess,
+        "run",
+        _fake_run(
+            captured,
+            returncode=1,
+            stderr="Authorization: Bearer secret-token api_key=abc123",
+        ),
+    )
+    cfg = {"summarizer": {"command": ["my-engine"], "timeout": 5}}
+
+    with pytest.raises(RuntimeError) as exc:
+        summarize.call_model("hi", cfg)
+
+    text = str(exc.value)
+    assert "secret-token" not in text
+    assert "abc123" not in text
+    assert text.count("[REDACTED]") == 2
+
+
+def test_call_model_keeps_prompt_on_stdin_and_uses_temp_cwd(monkeypatch):
+    """Keep transcript text out of argv/env while running from a neutral cwd."""
+    prompt = "session transcript with private content"
+    captured = {}
+    monkeypatch.setattr(summarize.subprocess, "run", _fake_run(captured))
+    cfg = {"summarizer": {"command": ["my-engine", "--fast"], "timeout": 5}}
+
+    summarize.call_model(prompt, cfg)
+
+    assert captured["kwargs"]["input"] == prompt
+    assert prompt not in captured["cmd"]
+    assert prompt not in captured["kwargs"]["env"].values()
+    assert captured["kwargs"]["cwd"] == tempfile.gettempdir()
+
+
+def test_call_model_resolves_executable(monkeypatch):
+    """Resolve configured executables before passing them to subprocess.run."""
+    captured = {}
+    monkeypatch.setattr(summarize.subprocess, "run", _fake_run(captured))
+    monkeypatch.setattr(summarize.shutil, "which", lambda _name: "/resolved/my-engine")
+    cfg = {"summarizer": {"command": ["my-engine", "--fast"], "timeout": 5}}
+
+    summarize.call_model("hi", cfg)
+
+    assert captured["cmd"] == ["/resolved/my-engine", "--fast"]
 
 
 def test_call_model_strips_claudecode_from_child_env(monkeypatch):

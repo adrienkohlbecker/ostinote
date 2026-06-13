@@ -290,6 +290,15 @@ def _recover_missed(env: Env) -> int:
         path = state.transcript_path
         if not path or not os.path.exists(path):
             continue
+        cwd = state.cwd or env.cwd
+        try:
+            agent = get_agent(state.agent)
+        except ValueError:
+            env.log("recovery", "skipping unknown agent state: %s" % state.agent)
+            continue
+        if not agent.accepts_transcript_path(path, cwd):
+            env.log("recovery", "skipping invalid transcript path for %s: %s" % (state.agent, path))
+            continue
         try:
             mtime = os.path.getmtime(path)
         except OSError:

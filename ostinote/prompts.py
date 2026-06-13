@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+from html import escape
 
 PROMPTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts")
 
@@ -54,11 +55,16 @@ def build_consolidation_prompt(
 
     Each staging file is wrapped in a labeled ``<staging_file>`` tag rather
     than bare ``---`` fences so file content containing dashes (or text that
-    mimics a fence) cannot blur the boundary between files.
+    mimics a fence) cannot blur the boundary between files. Attribute values
+    and content are escaped because both filenames and memory text are
+    untrusted model inputs.
     """
     staging_section = ""
     for filename in sorted(staging):
-        staging_section += '\n<staging_file name="%s">\n%s\n</staging_file>\n' % (filename, staging[filename])
+        staging_section += '\n<staging_file name="%s">\n%s\n</staging_file>\n' % (
+            escape(filename, quote=True),
+            escape(staging[filename], quote=False),
+        )
     return _render(
         "consolidate-staging.prompt.txt",
         {

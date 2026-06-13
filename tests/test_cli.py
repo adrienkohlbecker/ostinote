@@ -1,10 +1,10 @@
 import os
-import subprocess
 
 import pytest
 
 from ostinote import cli as cli_mod
 from ostinote.state import SessionState
+from tests.helpers import run_git
 
 # --- CLI ------------------------------------------------------------------------------
 
@@ -174,7 +174,7 @@ def test_cli_project_install_uses_git_worktree_root(tmp_path, installer_env):
     repo = tmp_path / "repo"
     subdir = repo / "src" / "pkg"
     subdir.mkdir(parents=True)
-    subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True, timeout=30)
+    run_git(repo, "init", "-q")
 
     assert cli_mod.main(["install", "codex", "--project", "--cwd", str(subdir)]) == 0
 

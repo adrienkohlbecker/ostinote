@@ -16,6 +16,8 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 
+from .agents.base import Agent
+
 DEFAULT_COMMAND = [
     "claude",
     "-p",
@@ -91,7 +93,8 @@ def call_model(prompt: str, cfg: dict) -> ModelResult:
         raise RuntimeError("summarizer failed to start: %s" % e) from e
 
     if result.returncode != 0:
-        raise RuntimeError("summarizer exited %d: %s" % (result.returncode, result.stderr.strip()[:300]))
+        stderr = Agent._redact_sensitive(result.stderr.strip())[:300]
+        raise RuntimeError("summarizer exited %d: %s" % (result.returncode, stderr))
 
     return parse_response(result.stdout)
 

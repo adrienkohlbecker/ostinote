@@ -294,6 +294,23 @@ def test_post_tool_rejects_transcript_from_another_codex_project(tmp_path, monke
     assert not os.path.exists(env.sessions_dir) or os.listdir(env.sessions_dir) == []
 
 
+def test_post_tool_rejects_transcript_from_another_claude_project(tmp_path, monkeypatch, make_project_env, spawned):
+    """Reject Claude hook transcripts outside the current project's session dir.
+
+    Expected: a forged hook payload pointing at a sibling Claude project does
+    not register state or queue a save, matching the Codex provenance guard.
+    """
+    env = make_project_env()
+    other = types.SimpleNamespace(cwd=str(tmp_path / "other-project"))
+    transcript = _claude_hook_transcript(other, "session-abc.jsonl", ["{}"])
+    hook_stdin(monkeypatch, {"cwd": env.cwd, "transcript_path": transcript, "session_id": "s1"})
+
+    hooks_mod.post_tool("claude")
+
+    assert spawned == []
+    assert not os.path.exists(env.sessions_dir) or os.listdir(env.sessions_dir) == []
+
+
 def test_malformed_hook_input_is_logged(tmp_path, monkeypatch, make_project_env):
     """Record undecodable hook payloads instead of failing silently.
 
@@ -458,7 +475,16 @@ def _recovery_env(tmp_path):
     A full Env would drag in config loading and data-dir resolution that the
     recovery-selection tests don't exercise.
     """
-    return types.SimpleNamespace(sessions_dir=str(tmp_path / "sessions"), cwd=str(tmp_path))
+    return types.SimpleNamespace(sessions_dir=str(tmp_path / "sessions"), cwd=str(tmp_path), log=lambda *_args: None)
+
+
+def _recovery_transcript(env, name="session.jsonl", lines=2, age=None, cwd=None):
+    """Create an idle Codex transcript that passes recovery provenance checks."""
+    transcript_env = types.SimpleNamespace(cwd=cwd or env.cwd)
+    path = _codex_hook_transcript(transcript_env, name, ["{}"] * max(lines - 1, 0))
+    if age is not None:
+        age_file(path, age)
+    return path
 
 
 def test_session_start_recovery_queues_forced_save(tmp_path, monkeypatch, make_project_env, spawned, capsys):
@@ -473,11 +499,10 @@ def test_session_start_recovery_queues_forced_save(tmp_path, monkeypatch, make_p
     env = make_project_env()
     env.ensure_dirs()
     (tmp_path / "data" / "recent.md").write_text("# Recent\n\nremembered\n", encoding="utf-8")
-    transcript = tmp_path / "session.jsonl"
-    transcript.write_text("{}\n{}\n", encoding="utf-8")
-    age_file(transcript, hooks_mod._RECOVERY_ACTIVE_WINDOW + 1)
+    transcript = _recovery_transcript(env, name="stale.jsonl", age=hooks_mod._RECOVERY_ACTIVE_WINDOW + 1)
     state = SessionState.load(env.sessions_dir, "codex", "stale")
-    state.transcript_path = str(transcript)
+    state.transcript_path = transcript
+    state.cwd = env.cwd
     state.save()
     hook_stdin(monkeypatch, {"cwd": env.cwd})
 
@@ -491,7 +516,7 @@ def test_session_start_recovery_queues_forced_save(tmp_path, monkeypatch, make_p
             "--session",
             "stale",
             "--transcript",
-            str(transcript),
+            transcript,
             "--cwd",
             env.cwd,
             "--force",
@@ -500,111 +525,78 @@ def test_session_start_recovery_queues_forced_save(tmp_path, monkeypatch, make_p
     assert "remembered" in capsys.readouterr().out
 
 
-def test_recovery_uses_saved_line_not_failed_attempt_time(tmp_path, spawned):
-    """Recover missed transcript lines even after a failed save attempt.
+@pytest.mark.parametrize(
+    "case",
+    [
+        pytest.param(
+            {
+                "lines": 3,
+                "saved_line": 1,
+                "age": hooks_mod._RECOVERY_ACTIVE_WINDOW + 1,
+                "last_attempt": True,
+                "expected_count": 1,
+            },
+            id="unsaved-after-failed-attempt",
+        ),
+        pytest.param(
+            {
+                "lines": 2,
+                "saved_line": 0,
+                "age": hooks_mod._RECOVERY_ACTIVE_WINDOW + 1,
+                "stored_cwd": "other-worktree",
+                "expected_count": 1,
+            },
+            id="uses-original-cwd",
+        ),
+        pytest.param(
+            {"lines": 2, "saved_line": 2, "age": hooks_mod._RECOVERY_ACTIVE_WINDOW + 1, "expected_count": 0},
+            id="fully-saved",
+        ),
+        pytest.param({"lines": 3, "saved_line": 1, "age": None, "expected_count": 0}, id="active-transcript"),
+        pytest.param({"lines": 2, "saved_line": 1, "age": 7 * 86400 + 1, "expected_count": 0}, id="too-old"),
+        pytest.param(
+            {
+                "lines": 2,
+                "saved_line": 0,
+                "age": hooks_mod._RECOVERY_ACTIVE_WINDOW + 1,
+                "invalid_path": True,
+                "expected_count": 0,
+            },
+            id="invalid-provenance",
+        ),
+    ],
+)
+def test_recovery_selection_matrix(tmp_path, spawned, case):
+    """Recover only idle, unsaved transcripts that still match agent provenance.
 
-    Expected: recovery compares transcript line count to the saved line marker,
-    not `last_attempt_ts`; unsaved idle content queues a forced background save.
+    Expected: recovery uses the saved line marker (not the attempted timestamp),
+    preserves the original cwd, skips active/complete/stale sessions, and never
+    trusts a state file that points outside the agent's transcript root.
     """
-    transcript = tmp_path / "session.jsonl"
-    transcript.write_text("{}\n{}\n{}\n")
-    # Recovery deliberately ignores transcripts that still look active.
-    age_file(transcript, hooks_mod._RECOVERY_ACTIVE_WINDOW + 1)
-
     env = _recovery_env(tmp_path)
+    stored_cwd = str(tmp_path / case["stored_cwd"]) if case.get("stored_cwd") else env.cwd
+    if case.get("invalid_path"):
+        transcript = str(tmp_path / "outside.jsonl")
+        with open(transcript, "w", encoding="utf-8") as f:
+            f.write("{}\n{}\n")
+        age_file(transcript, case["age"])
+    else:
+        transcript = _recovery_transcript(env, lines=case["lines"], age=case["age"], cwd=stored_cwd)
+
     state = SessionState.load(env.sessions_dir, "codex", "session")
-    state.transcript_path = str(transcript)
-    state.line = 1
-    state.last_attempt_ts = time.time()
+    state.transcript_path = transcript
+    state.cwd = stored_cwd
+    state.line = case["saved_line"]
+    if case.get("last_attempt"):
+        state.last_attempt_ts = time.time()
     state.save()
 
-    assert hooks_mod._recover_missed(env) == 1
-    assert spawned
-    assert "--force" in spawned[0]
-
-
-def test_recovery_uses_original_session_cwd(tmp_path, spawned):
-    """Recover a stale session with the cwd where that session ran.
-
-    Expected: if a later SessionStart notices missed work from another
-    worktree, the forced save receives the stored cwd instead of the new
-    session's cwd, preserving branch/config context.
-    """
-    transcript = tmp_path / "session.jsonl"
-    transcript.write_text("{}\n{}\n")
-    age_file(transcript, hooks_mod._RECOVERY_ACTIVE_WINDOW + 1)
-
-    env = _recovery_env(tmp_path)
-    original_cwd = str(tmp_path / "other-worktree")
-    state = SessionState.load(env.sessions_dir, "codex", "session")
-    state.transcript_path = str(transcript)
-    state.cwd = original_cwd
-    state.save()
-
-    assert hooks_mod._recover_missed(env) == 1
-    assert spawned[0][spawned[0].index("--cwd") + 1] == original_cwd
-
-
-def test_recovery_skips_fully_saved_transcripts(tmp_path, spawned):
-    """Avoid recovery work for transcripts already saved through their end.
-
-    Expected: if the saved line marker equals the transcript line count, no
-    background save is queued.
-    """
-    transcript = tmp_path / "session.jsonl"
-    transcript.write_text("{}\n{}\n")
-    # Make the transcript old enough to pass the "not actively changing" gate.
-    age_file(transcript, hooks_mod._RECOVERY_ACTIVE_WINDOW + 1)
-
-    env = _recovery_env(tmp_path)
-    state = SessionState.load(env.sessions_dir, "codex", "session")
-    state.transcript_path = str(transcript)
-    state.line = 2
-    state.save()
-
-    assert hooks_mod._recover_missed(env) == 0
-    assert spawned == []
-
-
-def test_recovery_skips_active_transcripts(tmp_path, spawned):
-    """Leave recently-changed transcripts to their own live session's hooks.
-
-    Expected: a transcript with unsaved lines but a fresh mtime is presumed to
-    belong to a running parallel session, so recovery queues nothing — saving
-    it here would race the session's own post-tool save.
-    """
-    transcript = tmp_path / "session.jsonl"
-    transcript.write_text("{}\n{}\n{}\n")  # mtime is now: looks active
-
-    env = _recovery_env(tmp_path)
-    state = SessionState.load(env.sessions_dir, "codex", "session")
-    state.transcript_path = str(transcript)
-    state.line = 1
-    state.save()
-
-    assert hooks_mod._recover_missed(env) == 0
-    assert spawned == []
-
-
-def test_recovery_skips_transcripts_older_than_seven_days(tmp_path, spawned):
-    """Bound recovery to the last week of idle sessions.
-
-    Expected: a transcript with unsaved lines whose mtime is past the 7-day
-    window queues nothing — recovery is a crash-recovery net for recent work,
-    not a paid backfill of arbitrarily stale sessions after a long break.
-    """
-    transcript = tmp_path / "session.jsonl"
-    transcript.write_text("{}\n{}\n")
-    age_file(transcript, 7 * 86400 + 1)
-
-    env = _recovery_env(tmp_path)
-    state = SessionState.load(env.sessions_dir, "codex", "session")
-    state.transcript_path = str(transcript)
-    state.line = 1
-    state.save()
-
-    assert hooks_mod._recover_missed(env) == 0
-    assert spawned == []
+    assert hooks_mod._recover_missed(env) == case["expected_count"]
+    if case["expected_count"]:
+        assert "--force" in spawned[0]
+        assert spawned[0][spawned[0].index("--cwd") + 1] == stored_cwd
+    else:
+        assert spawned == []
 
 
 def test_recovery_caps_queued_sessions_to_newest(tmp_path, spawned):
@@ -618,14 +610,17 @@ def test_recovery_caps_queued_sessions_to_newest(tmp_path, spawned):
     env = _recovery_env(tmp_path)
     paths = []
     for i in range(5):
-        transcript = tmp_path / ("session-%d.jsonl" % i)
-        transcript.write_text("{}\n{}\n")
         # All idle, with distinct ages: session-0 oldest, session-4 newest.
-        age_file(transcript, hooks_mod._RECOVERY_ACTIVE_WINDOW + 1000 - i)
+        transcript = _recovery_transcript(
+            env,
+            name="session-%d.jsonl" % i,
+            age=hooks_mod._RECOVERY_ACTIVE_WINDOW + 1000 - i,
+        )
         state = SessionState.load(env.sessions_dir, "codex", "session-%d" % i)
-        state.transcript_path = str(transcript)
+        state.transcript_path = transcript
+        state.cwd = env.cwd
         state.save()
-        paths.append(str(transcript))
+        paths.append(transcript)
 
     assert hooks_mod._recover_missed(env) == hooks_mod._RECOVERY_MAX == 3
     recovered = sorted(args[args.index("--transcript") + 1] for args in spawned)

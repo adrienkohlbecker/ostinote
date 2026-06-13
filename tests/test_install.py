@@ -548,19 +548,23 @@ def test_doctor_reports_missing_skill_and_codex_writable_root(tmp_path, monkeypa
 
 
 @pytest.mark.skipif(os.name == "nt", reason="symlink behavior differs on Windows")
-def test_doctor_probe_does_not_follow_fixed_symlink(tmp_path, monkeypatch, capsys, installer_env):
-    """Doctor should not clobber a pre-planted .doctor-probe symlink."""
+def test_doctor_reports_symlinked_state_dir_without_following(tmp_path, monkeypatch, capsys, installer_env):
+    """Doctor should fail a symlinked state dir without writing through it."""
     monkeypatch.setattr(doctor_mod.shutil, "which", lambda _: "/usr/bin/claude")
     proj = tmp_path / "proj"
-    (proj / ".ostinote" / "state").mkdir(parents=True)
+    (proj / ".ostinote").mkdir(parents=True)
     (proj / ".ostinote" / "config.json").write_text(
         json.dumps({"share_worktrees": False, "data_dir": ".ostinote"}), encoding="utf-8"
     )
-    target = tmp_path / "target.txt"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    target = outside / "target.txt"
     target.write_text("keep me", encoding="utf-8")
-    os.symlink(target, proj / ".ostinote" / "state" / ".doctor-probe")
+    os.symlink(outside, proj / ".ostinote" / "state")
 
-    doctor_mod.run(Env(str(proj)))
+    assert doctor_mod.run(Env(str(proj))) == 1
 
     assert target.read_text(encoding="utf-8") == "keep me"
-    capsys.readouterr()
+    out = capsys.readouterr().out
+    assert "data dir not writable" in out
+    assert "symlinked directory" in out

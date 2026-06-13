@@ -74,6 +74,14 @@ def base_test_config(recovery=True):
     }
 
 
+def project_with_config(tmp_path, cfg, name="proj"):
+    """Create a project directory with the given repo-local Ostinote config."""
+    proj = tmp_path / name
+    (proj / ".ostinote").mkdir(parents=True)
+    (proj / ".ostinote" / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
+    return proj
+
+
 def project_env(tmp_path, monkeypatch, extra_cfg=None):
     # data_dir is a guarded key: a project-layer value outside the repo /
     # ~/.ostinote is rejected as an untrusted redirect, so tests supply it via
@@ -129,11 +137,48 @@ def age_file(path, seconds):
 
 
 def deep_update(base, override):
+    """Recursively merge ``override`` into ``base`` for test config dicts."""
     for key, value in override.items():
         if isinstance(value, dict) and isinstance(base.get(key), dict):
             deep_update(base[key], value)
         else:
             base[key] = value
+
+
+def run_git(cwd, *args):
+    """Run git in a temp repo without inheriting machine-local commit policy.
+
+    The test repos exercise Ostinote's git-root behavior, not the developer's
+    global templates, hooks, or signing configuration. Fixture commits opt out
+    explicitly so they stay boring on heavily customized machines.
+    """
+    normalized = list(args)
+    if (
+        normalized[:1] == ["init"]
+        and "--template" not in normalized
+        and not any(arg.startswith("--template=") for arg in normalized)
+    ):
+        normalized = ["init", "--template=", *normalized[1:]]
+    if normalized[:1] == ["commit"]:
+        normalized = ["commit", "--no-gpg-sign", "--no-verify", *normalized[1:]]
+    return subprocess.run(
+        [
+            "git",
+            "-C",
+            str(cwd),
+            "-c",
+            "user.email=test@test",
+            "-c",
+            "user.name=test",
+            "-c",
+            "commit.gpgSign=false",
+            *normalized,
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
 
 
 # Stands in for the real summarizer in functional subprocess tests: echoes
@@ -208,7 +253,7 @@ def run_cli(args, cwd, env, **kwargs):
     # A regression that blocks on stdin must fail the test, not hang CI.
     kwargs.setdefault("timeout", 60)
     return subprocess.run(
-        [sys.executable, "-m", "ostinote", *args],
+        [sys.executable, "-P", "-m", "ostinote", *args],
         cwd=cwd,
         env=env,
         capture_output=True,

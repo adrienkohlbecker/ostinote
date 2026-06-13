@@ -14,6 +14,20 @@ from tests.helpers import codex_assistant, codex_user, functional_cli_project, r
 pytestmark = pytest.mark.functional
 
 
+def test_functional_cli_project_env_allowlist_excludes_shell_secrets(tmp_path, monkeypatch):
+    """Build subprocess envs from an allow-list, not the developer shell."""
+    for key in ("OPENAI_API_KEY", "AWS_SECRET_ACCESS_KEY", "CLAUDE_PROJECT_DIR", "OSTINOTE_PRIVATE_SENTINEL"):
+        monkeypatch.setenv(key, "should-not-leak")
+
+    _proj, _data, env, _prompt_log = functional_cli_project(tmp_path)
+
+    assert "OPENAI_API_KEY" not in env
+    assert "AWS_SECRET_ACCESS_KEY" not in env
+    assert "CLAUDE_PROJECT_DIR" not in env
+    assert "OSTINOTE_PRIVATE_SENTINEL" not in env
+    assert "OSTINOTE_FAKE_PROMPTS" in env
+
+
 def test_cli_save_functional_with_fake_summarizer(tmp_path):
     """Run `python -m ostinote save` end-to-end with a fake summarizer process.
 
@@ -158,7 +172,7 @@ def test_cli_install_codex_hook_functional_injects_memory(tmp_path):
     wrapper = bin_dir / "ostinote"
     # `install` records `self_command()` in hook JSON. The temp PATH makes that
     # command stable and executable without installing the package globally.
-    wrapper.write_text('#!/bin/sh\nexec %s -m ostinote "$@"\n' % shlex.quote(sys.executable), encoding="utf-8")
+    wrapper.write_text('#!/bin/sh\nexec %s -P -m ostinote "$@"\n' % shlex.quote(sys.executable), encoding="utf-8")
     wrapper.chmod(0o755)
     env["PATH"] = str(bin_dir) + os.pathsep + env["PATH"]
 

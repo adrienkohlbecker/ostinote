@@ -265,12 +265,17 @@ def run_consolidation(env: Env) -> int:
             return 0
 
         contents = {}
+        unreadable = []
         for path in staging:
             try:
                 with open(path, encoding="utf-8") as f:
                     contents[os.path.basename(path)] = f.read()
-            except OSError:
-                pass
+            except OSError as exc:
+                unreadable.append((path, exc))
+        if unreadable:
+            for path, exc in unreadable:
+                env.log("consolidation", "ERROR: cannot read staging file %s: %s" % (os.path.basename(path), exc))
+            return 1
 
         recent = _read_or_empty(env.recent_file)
         archive = _read_or_empty(env.archive_file)

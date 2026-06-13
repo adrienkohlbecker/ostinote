@@ -1,3 +1,4 @@
+import builtins
 import os
 import time
 
@@ -299,6 +300,36 @@ def test_run_consolidation_failure_leaves_memory_untouched(tmp_path, monkeypatch
     assert (tmp_path / "data" / "recent.md").read_text(encoding="utf-8") == "# Recent\n\nold recent"
     assert (tmp_path / "data" / "archive.md").read_text(encoding="utf-8") == "# Archive\n\nold archive"
     assert not (tmp_path / "data" / "recent.md.bak").exists()
+
+
+def test_run_consolidation_unreadable_staging_leaves_memory_untouched(tmp_path, monkeypatch, make_project_env):
+    """Abort consolidation before consuming staging when an input cannot be read.
+
+    Expected: a staging read failure returns 1, leaves the daily file unrenamed,
+    does not call the model, and keeps recent/archive byte-identical.
+    """
+    env = make_project_env()
+    staging = _seed_consolidation(tmp_path, env)
+    real_open = builtins.open
+
+    def fake_open(path, *args, **kwargs):
+        if os.fspath(path) == str(staging):
+            raise OSError("permission denied")
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(pipeline_mod, "open", fake_open, raising=False)
+    monkeypatch.setattr(
+        pipeline_mod.summarize,
+        "call_model",
+        lambda _prompt, _cfg: pytest.fail("unreadable staging must not call the model"),
+    )
+
+    assert pipeline_mod.run_consolidation(env) == 1
+
+    assert staging.read_text(encoding="utf-8") == "## old\nA"
+    assert not (tmp_path / "data" / "today-2000-01-01.done.md").exists()
+    assert (tmp_path / "data" / "recent.md").read_text(encoding="utf-8") == "# Recent\n\nold recent"
+    assert (tmp_path / "data" / "archive.md").read_text(encoding="utf-8") == "# Archive\n\nold archive"
 
 
 def test_run_consolidation_missing_archive_section_keeps_archive(tmp_path, monkeypatch, make_project_env):
