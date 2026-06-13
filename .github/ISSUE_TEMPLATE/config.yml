@@ -1,5 +1,8 @@
 blank_issues_enabled: false
 contact_links:
+  - name: Security vulnerability
+    url: https://github.com/adrienkohlbecker/ostinote/security/policy
+    about: Report vulnerabilities or sensitive diagnostics privately.
   - name: Question or discussion
     url: https://github.com/adrienkohlbecker/ostinote/discussions
     about: Ask questions and share ideas here rather than opening an issue.

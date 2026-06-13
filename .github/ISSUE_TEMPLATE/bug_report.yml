@@ -27,20 +27,25 @@ body:
         - Claude Code
         - Codex CLI
         - Other / N/A
+    validations:
+      required: true
   - type: textarea
     id: logs
     attributes:
       label: Relevant logs
       description: >
-        From `logs/memory-<date>.log` inside the data dir (default
-        `~/.ostinote/projects/<slug>/`) and `~/.ostinote/hook-errors.log`.
-        Redact anything sensitive — log lines can contain summaries of your
-        sessions.
+        Public issues need only the smallest relevant, redacted snippet. Useful
+        sources are `logs/memory-<date>.log` and `logs/background.log` inside
+        the data dir (default `~/.ostinote/projects/<slug>/`) plus
+        `~/.ostinote/hook-errors.log`. Log lines can contain session summaries,
+        local paths, prompts, or secrets; report vulnerabilities or sensitive
+        diagnostics privately via the security policy instead of pasting them
+        here.
       render: text
   - type: input
     id: version
     attributes:
       label: Versions
-      placeholder: "`ostinote --version` output, OS, Python, claude CLI version"
+      placeholder: "`ostinote --version` output, OS, Python, and relevant agent CLI version(s)"
     validations:
       required: true
