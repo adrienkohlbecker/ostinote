@@ -8,21 +8,26 @@ The repo uses [mise](https://mise.jdx.dev) to pin Python and uv and to expose ta
 
 ```bash
 git clone https://github.com/adrienkohlbecker/ostinote && cd ostinote
-mise install        # Python + uv, creates .venv
-mise run setup      # locked editable install with dev deps (uv sync)
-mise run test       # pytest suite
-mise run lint       # ruff check + format check (same as CI)
-mise run fix        # auto-fix lint findings and reformat
+mise install                         # Python + uv, creates .venv
+mise run setup                       # locked editable install with dev deps
+mise run test                        # pytest suite
+mise run test -- -m "not functional" # fast loop without subprocess tests
+mise run lint                        # ruff check + format check (same as CI)
+mise run fix                         # auto-fix lint findings and reformat
 ```
 
-Without mise: any Python 3.11+, `pip install -e . --group dev` (pip ≥ 25.1), then `pytest`, `ruff check .`, `ruff format .`. Note that CI installs the exact versions in `uv.lock`; if a lint or format check disagrees with CI, that's the first thing to look at.
+Use `mise tasks ls` to discover the full task list. Without mise: any Python 3.11+, `pip install -e . --group dev` (pip ≥ 25.1), then `pytest`, `ruff check .`, `ruff format .`. Note that CI installs the exact versions in `uv.lock`; if a lint or format check disagrees with CI, that's the first thing to look at.
 
 Useful while hacking:
 
 ```bash
-ostinote save --dry --agent claude   # show what the parser extracts, no model call
-ostinote status                      # inspect memory state for this project
+mise run dry:claude   # show what the Claude parser extracts, no model call
+mise run dry:codex    # show what the Codex parser extracts, no model call
+ostinote status       # inspect memory state for this project
 ```
+
+Dry-run output can contain private transcript material; redact it before
+sharing.
 
 ## Guidelines
 
@@ -38,4 +43,4 @@ Keep PRs focused on one change. Describe the user-visible behavior in the descri
 
 ## Reporting bugs
 
-Use the bug report issue template. Hook crashes land in `~/.ostinote/hook-errors.log` and pipeline activity in `logs/memory-<date>.log` inside the data dir (default `~/.ostinote/projects/<slug>/`) — including the relevant lines makes most bugs trivially diagnosable. Review and redact log lines before posting: they can contain summaries of your sessions and local paths.
+Use the bug report issue template. Hook crashes land in `~/.ostinote/hook-errors.log`, pipeline activity in `logs/memory-<date>.log`, and detached save subprocess output in `logs/background.log` inside the data dir (default `~/.ostinote/projects/<slug>/`) — including the relevant lines makes most bugs trivially diagnosable. Review and redact log lines before posting: they can contain summaries of your sessions and local paths.

@@ -12,7 +12,7 @@ Coding agents start every session blank. You re-explain the project, the convent
 > **The name:** an *ostinato* is a musical motif that persists, repeating underneath everything else in a piece. Cross it with *note* — a written one — and you get **ostinote**: a persistent note running under all your sessions.
 
 ```
-You, yesterday in Codex:    "the deploy failed because of the zram unit"
+You, yesterday in Codex:        "the deploy failed because of the zram unit"
 Your agent, today in Claude Code:  already knows.
 ```
 
@@ -22,6 +22,9 @@ Your agent, today in Claude Code:  already knows.
 # 1. Install the CLI (any Python 3.11+; `pipx install ostinote` works too)
 uv tool install ostinote
 
+# If your shell cannot find `ostinote` after install:
+uv tool update-shell
+
 # 2. Hook it into your agents (one-time, global)
 ostinote install claude
 ostinote install codex
@@ -29,123 +32,77 @@ ostinote install codex
 # 3. Done. Work normally — memory accumulates in ~/.ostinote/projects/<project-slug>/
 ```
 
-By default your memory lives **outside** your repos, in `~/.ostinote/projects/<project-slug>/` (one folder per project) — so it never shows up in your repo's diffs or your agent's review UI. Prefer it in-repo? Set `"data_dir": ".ostinote"` (see [Configuration](#configuration)).
+**Requirements:** Python 3.11+ and the `claude` CLI (used for summarization, with Haiku). Works on macOS and Linux; Windows is supported in the code (no bash needed) but has not seen much real-world testing yet.
 
-Codex will ask you to trust the new hooks once on its next start. To stop using it: `ostinote uninstall all`.
+By default your memory lives **outside** your repos, in `~/.ostinote/projects/<project-slug>/` (one folder per project), so it does not show up in repo diffs or your agent's review UI. Prefer it in-repo? Set `"data_dir": ".ostinote"` (see [Configuration](#configuration)), keep that directory untracked, and treat anything inside it as future prompt input.
+
+Codex will ask you to trust the new hooks once on its next start.
 
 > **Migrating from the `remember` Claude Code marketplace plugin?** Disable it first (`/plugin`), or both will save the same sessions twice. Formats and config keys are compatible — see [Migrating from the `remember` plugin](#migrating-from-the-remember-plugin).
 
-**Requirements:** Python 3.11+ and the `claude` CLI (used for summarization, with Haiku). Works on macOS and Linux; Windows is supported in the code (no bash needed) but hasn't seen real-world testing yet.
+## Lifecycle
+
+`ostinote` has three kinds of state, and they are removed separately:
+
+| Goal | Command | What remains |
+|---|---|---|
+| Update the CLI | `uv tool upgrade ostinote` | Hooks and memory stay as-is |
+| Remove hooks and skills | `ostinote uninstall all` | The CLI, memory files, logs, and Codex writable-root grants remain |
+| Remove the CLI | `uv tool uninstall ostinote` | Hooks already registered in agent configs are not removed automatically |
+
+Use `ostinote status` to locate the memory directory before deleting old data manually. Codex installs add the memory directory to `sandbox_workspace_write.writable_roots`; uninstall leaves that grant in place intentionally so existing memory remains usable until you remove the entry yourself.
+
+## Privacy and data flow
+
+`ostinote` reads agent transcripts, extracts the new human/assistant conversation, and sends that extract to the configured summarizer. The default summarizer is the `claude` CLI with Haiku, so extracted conversation content leaves your machine for Anthropic's API. The orchestration is local, but the default model call is not.
+
+Generated memory and logs are plaintext markdown/text files under the memory directory. They can contain session summaries, local paths, command output, and other sensitive context. `ostinote save --dry` avoids model calls and writes, but it still prints extracted transcript content; redact it before sharing.
+
+Memory files are injected verbatim into future fresh agent sessions. If you choose in-repo memory (`"data_dir": ".ostinote"`) or migrate an old `.remember/` directory, inspect it first, keep it untracked/private, and remember that edits to memory files can influence later sessions.
+
+Only trusted user config (`~/.ostinote/config.json`) may set `summarizer.command`, because that command runs with your user privileges and receives extracted transcript content on stdin. Prefer direct, trusted executables over shell wrappers such as `sh -c`. Per-project config is treated as untrusted and cannot choose the executable.
+
+See [SECURITY.md](SECURITY.md) for the vulnerability-reporting scope.
 
 ## How it works
 
-Your raw transcripts are huge; context windows are not. So memory is stored in layers, each one a compressed version of the layer above:
+The mental model is simple:
 
-```
-your session transcript
-   │   (summarized every few minutes during work)
-   ▼
-now.md                — running buffer of one-line entries for the current stretch
-   │   (compressed about once an hour)
-   ▼
-today-2026-06-10.md   — today's activity, deduplicated and merged
-   │   (consolidated once the day is over)
-   ▼
-recent.md             — the last ~7 days, one short entry per day
-archive.md            — everything older, one short entry per week
-```
+1. **Capture:** hooks notice when a Claude Code or Codex transcript has enough new conversation.
+2. **Summarize:** a detached background process asks the summarizer for a concise entry and appends it to `now.md`.
+3. **Compress:** periodic jobs merge `now.md` into `today-YYYY-MM-DD.md`, then older days into `recent.md` and `archive.md`.
+4. **Inject:** fresh sessions receive a `=== MEMORY ===` block assembled from the useful layers.
 
-All summarization and compression is done by Claude Haiku in the background — a typical save costs well under a cent.
+Both agents use the same storage, locks, cooldowns, recovery logic, and consolidation pipeline. Parallel sessions are safe: each session tracks its own transcript position, shared writes are serialized by a lock, and git worktrees share the main checkout's memory by default (`share_worktrees`).
 
-Under the hood, both agents expose the same hook system (Codex's hooks are Claude-compatible), so one CLI serves both:
+Optional curated memory files live alongside the automatic layers. `identity.md` is written by you and injected first. `core-memories.md` is append-only durable memory; the installed `/ostinote` skill in Claude Code and `$ostinote` skill in Codex append one dated line there when you want a fact to survive normal aging.
 
-| When | What `ostinote` does |
-|---|---|
-| Session starts | Injects memory into context; rescues sessions that ended without a final save; kicks off daily consolidation if needed |
-| After tool calls | Once enough new conversation accumulates, saves a summary in the background |
-| Session ends (Claude) / turn ends (Codex) | Saves anything not yet captured, in the background — the hook returns instantly, summarization finishes on its own. Codex has no session-end event, so its turn-end `Stop` hook stands in: every turn end is treated as a potential session end (free when nothing new happened) |
+## Check and inspect
 
-## Features in detail
-
-### Automatic capture
-
-While you work, `ostinote` watches the session transcript (via the agents' post-tool-use hook). Once enough new conversation has accumulated (`thresholds.delta_lines_trigger`, default 50 transcript lines) and the per-session cooldown has passed (`cooldowns.save_seconds`, default 2 minutes), it launches a background save: the new exchanges are extracted, sent to Haiku, and appended to `now.md` as a one-line entry like:
-
-```
-## 15:05 | master
-Built ostinote: multi-agent adapters, parallel-session state, CLI, tests.
-```
-
-Very short conversations are skipped (`thresholds.min_human_messages`, default 3 human messages), and if nothing meaningfully new happened since the last entry, the summarizer answers "SKIP" and nothing is written. Saves never block your agent — they run as detached background processes.
-
-### Hourly compression
-
-`now.md` grows one line per save. About once an hour (`cooldowns.compress_seconds`), the whole buffer is compressed into `today-YYYY-MM-DD.md`: entries about the same piece of work are merged into one time-blocked entry, filler is dropped, facts are kept. The buffer is then emptied. Disable with `features.hourly_compression: false` if you'd rather keep the raw entries all day.
-
-### Daily consolidation
-
-When a session starts and there are `today-*.md` files from *previous* days lying around, they're consolidated in the background: each past day becomes one short entry in `recent.md`, and entries older than a few days are rotated into `archive.md`, grouped by week. Processed daily files are renamed to `*.done.md` (kept, in case you ever want the originals). This is what keeps memory size roughly constant no matter how long you've been using it.
-
-### Memory injection at session start
-
-Every new session begins with a `=== MEMORY ===` block injected into the agent's context, assembled from whichever of these files exist and are non-empty, most personal first:
-
-1. `identity.md` — who the agent is (see below)
-2. `core-memories.md` — key moments (see below)
-3. `today-<date>.md` and `now.md` — what happened today
-4. `recent.md` — the last ~7 days
-5. `archive.md` — everything older
-
-It also tells the agent where the memory folder lives, so `/ostinote` and "search your memory" requests work without any setup.
-
-Injection only happens on fresh starts (`startup`/`clear`). Resumed and compacted sessions saw the memory already — both agents report how the session started via the hook's `source` field, and ostinote skips re-injection for `resume` and `compact`.
-
-### Identity (`identity.md`)
-
-Optional, written by you, never modified by the tool. If an `identity.md` file exists in your memory folder, its content is injected first in every fresh session — use it to give your agent a persistent persona, values, or standing instructions that should survive across sessions and across agents. Example:
-
-```markdown
-# Identity
-You are the long-running maintainer of this homelab. You prefer boring,
-debuggable solutions; you treat the operator as the on-call.
-```
-
-This differs from `CLAUDE.md`/`AGENTS.md`: those are per-agent and usually committed to the repo; `identity.md` is agent-neutral, private (the data directory lives outside the repo by default), and travels with the memory.
-
-### Core memories (`core-memories.md` and `/ostinote`)
-
-Yours to curate, never compressed. While the compression layers deliberately shed detail over time, anything in `core-memories.md` (in your memory folder) is injected verbatim in every fresh session, forever. Use it for the handful of moments or facts that should never age out — a hard-won debugging lesson, a decision and its rationale.
-
-When something like that happens, type `/ostinote <what to remember>` (in Codex: `$ostinote`, since Codex invokes skills with a `$` prefix) — installed as the same skill in both agents — and the agent appends it as a dated one-liner. With no argument, it distills the most durable lesson from the current session instead. Because the file is append-only and read by every session, this works the same from five parallel sessions across worktrees as it does from one.
-
-The daily consolidation can also promote on its own: when a day's entries contain a clearly durable fact (a final decision, a gotcha that will bite again), it appends a dated one-liner. It's instructed to be very conservative — most days promote nothing — and it only ever appends; pruning the file stays yours.
-
-### Recovery of missed sessions
-
-Claude Code sessions get a final save from the session-end hook, and Codex sessions from the turn-end save. But any session can still die without one (the laptop sleeps mid-turn, the agent crashes, the machine shuts down mid-save). Every session leaves a small bookkeeping record, and at the next session start `ostinote` checks for transcripts that grew after their last save, have been idle for at least 5 minutes (so live parallel sessions are left alone), and are less than a week old — and saves up to 3 of them in the background. Disable with `features.recovery: false`.
-
-### Parallel sessions, two agents, worktrees
-
-Everything is built for concurrency: each session tracks its own resume position in the memory folder's `state/sessions/`, writes to the shared memory files are serialized by an atomic lock, and save cooldowns are per-session. So you can run Claude Code and Codex side by side — or several of each — and they'll all feed one memory without duplicate or interleaved entries. Sessions started inside a git worktree write to the main checkout's memory by default (`share_worktrees`), so a fix made in a worktree is remembered in the main checkout tomorrow.
-
-## Everyday commands
-
-You rarely need any of these — the hooks do everything — but they're useful for checking on things:
+You rarely need these, but they are useful when something looks off:
 
 ```bash
-ostinote status          # where's my memory, what's in it, which sessions are tracked
-ostinote status --costs  # per-day token usage and cost, summed from the logs
-ostinote doctor          # check every link of the pipeline, loudly (--live: one real model call)
-ostinote save --dry      # show what would be captured from the latest session (no cost)
+ostinote status          # memory location, tracked sessions, last saves
+ostinote status --costs  # per-day token usage and cost, summed from logs
+ostinote doctor          # check hooks, config, summarizer, and writable data dir
+ostinote doctor --live   # include one real summarizer call
+ostinote save --dry      # print extracted conversation; no model call, no writes
 ostinote save --force    # save right now, skipping cooldowns
-ostinote consolidate     # run the daily consolidation right now
+ostinote consolidate     # run daily consolidation right now
 ```
 
-For development there are mise tasks: `mise run test`, `mise run lint`, `mise run dry:claude`, `mise run dry:codex`, etc.
+Development tasks include `mise run test`, `mise run test -- -m "not functional"`, `mise run lint`, `mise run dry:claude`, and `mise run dry:codex`.
+
+Troubleshooting notes:
+
+- **Nothing is being saved.** Check that `claude` is on the PATH of the shell your agent launches hooks from, and that the session has at least `min_human_messages` human messages.
+- **What is it capturing, exactly?** `ostinote save --dry` prints the extracted conversation without calling the model or writing anything. Treat the output as private transcript material.
+- **Where are logs?** Pipeline activity is logged to `logs/memory-<date>.log` inside the data dir, detached save subprocess output goes to `logs/background.log`, and hook crashes land in `~/.ostinote/hook-errors.log`. Redact before sharing.
+- **Codex says hooks need approval.** Expected on first run — Codex pins a hash of each hook command and asks once.
 
 ## The memory files
 
-Everything lives in your per-project memory folder — by default `~/.ostinote/projects/<project-slug>/`, created automatically (or `<project>/.ostinote/` if you set `data_dir` to a relative path):
+Everything lives in your per-project memory folder, created automatically:
 
 | File | What it is |
 |---|---|
@@ -153,49 +110,36 @@ Everything lives in your per-project memory folder — by default `~/.ostinote/p
 | `today-*.md` | One file per day of compressed history |
 | `recent.md` | The last ~7 days |
 | `archive.md` | Older history |
-| `identity.md` | Optional — who your agent is. Write this yourself; it's injected first |
-| `core-memories.md` | Optional — key moments worth keeping verbatim, appended by `/ostinote` |
-| `state/`, `logs/` | Bookkeeping: per-session positions, locks, pipeline logs |
+| `identity.md` | Optional user-written persona/instructions, injected first |
+| `core-memories.md` | Optional durable facts, appended by `/ostinote` / `$ostinote` |
+| `state/`, `logs/` | Bookkeeping: transcript positions, locks, pipeline logs, background output |
 
 ## Configuration
 
-Optional. Create `~/.ostinote/config.json` (applies everywhere) or `<project>/.ostinote/config.json` (overrides per project). Everything has sensible defaults:
+Optional. Create `~/.ostinote/config.json` (trusted user config, applies everywhere) or `<project>/.ostinote/config.json` (untrusted project config, overrides safe project-local settings). The common settings are:
 
 ```json
 {
   "timezone": "Europe/Paris",
-  "cooldowns": { "save_seconds": 120 },
-  "thresholds": { "delta_lines_trigger": 50 }
+  "data_dir": "~/.ostinote/projects/{slug}",
+  "summarizer": { "timeout": 120 }
 }
 ```
 
 | Setting | Default | What it does |
 |---|---|---|
-| `data_dir` | `~/.ostinote/projects/{slug}` | Where memory lives. `{slug}` expands to the project's path (non-alphanumerics dashed). The default keeps memory in your home directory, out of every repo. Set a relative value like `".ostinote"` to store it in-repo instead. (Per-project *config* is always read from `<project>/.ostinote/config.json`, wherever the data lives.) |
-| `timezone` | system local | IANA zone name (e.g. `America/New_York`) for timestamps and day boundaries — set it on servers whose clock is UTC |
+| `data_dir` | `~/.ostinote/projects/{slug}` | Where memory lives. `{slug}` expands to the project's path. User config may point anywhere you trust. Project config may use an in-project relative path like `".ostinote"` or the validated per-project default external path; arbitrary external paths belong in user config. |
+| `timezone` | system local | IANA zone name (e.g. `America/New_York`) for timestamps and day boundaries |
 | `time_format` | `24h` | `24h` or `12h` timestamps |
 | `share_worktrees` | `true` | Sessions in git worktrees share the main checkout's memory |
-| `cooldowns.save_seconds` | `120` | Minimum time between saves of the same session |
-| `cooldowns.compress_seconds` | `3600` | How often `now.md` is compressed into the daily file |
-| `thresholds.min_human_messages` | `3` | Don't bother saving conversations shorter than this |
-| `thresholds.delta_lines_trigger` | `50` | How much new transcript triggers an automatic save |
-| `features.hourly_compression` | `true` | The hourly compression step |
-| `features.recovery` | `true` | Rescue unsaved sessions on the next session start |
-| `features.consolidation` | `true` | The daily recent/archive consolidation |
-| `summarizer.command` | claude + haiku | Swap in a different summarizer — a JSON array of argv strings, e.g. `["llm", "-m", "gpt-5-mini"]`, for any command that reads a prompt on stdin and prints a response. Honored only from `~/.ostinote/config.json` — a cloned repo's config must not be able to choose the executable |
+| `summarizer.command` | claude + haiku | Trusted user-config-only argv array for a summarizer that reads a prompt on stdin and prints a response |
 | `summarizer.timeout` | `120` | Summarizer timeout, seconds |
-| `debug` | `false` | Chatty logs about locks and cooldowns |
 
-Because a per-project config file arrives with a cloned repo, it is treated as untrusted: `summarizer.command` is ignored there (set it in `~/.ostinote/config.json`), and a project-set `data_dir` must stay inside the project or your ostinote home.
+Less common tuning keys include `cooldowns.save_seconds`, `cooldowns.compress_seconds`, `thresholds.min_human_messages`, `thresholds.delta_lines_trigger`, `features.hourly_compression`, `features.recovery`, `features.consolidation`, and `debug`.
 
-`ostinote install` also takes `--project` to register hooks for a single project (in `<project>/.claude/settings.json` / `<project>/.codex/hooks.json`) instead of globally.
+Because a per-project config file arrives with a cloned repo, it is treated as untrusted: `summarizer.command` is ignored there, and a project-set `data_dir` is contained before use.
 
-## Troubleshooting
-
-- **Is it running?** `ostinote doctor` checks the whole chain (hooks registered, config readable, summarizer present, data dir writable) and `ostinote status` shows tracked sessions and when they last saved. Pipeline activity is logged to `logs/memory-<date>.log` inside the data dir; hook crashes land in `~/.ostinote/hook-errors.log`.
-- **Nothing is being saved.** Check that `claude` is on the PATH of the shell your agent launches hooks from, and that the session has at least `min_human_messages` human messages.
-- **What is it capturing, exactly?** `ostinote save --dry` prints the extracted conversation without calling the model or writing anything.
-- **Codex says hooks need approval.** Expected on first run — Codex pins a hash of each hook command and asks once.
+`ostinote install` also takes `--project` to register hooks for a single project (in `<project>/.claude/settings.json` / `<project>/.codex/hooks.json`) instead of globally. Treat project hook files like executable agent config, review them before committing, and uninstall with the same `--project` scope.
 
 ## Adding another agent
 
@@ -203,7 +147,7 @@ The agent-specific surface is deliberately small: a transcript parser (`ostinote
 
 ## Migrating from the `remember` plugin
 
-Coming from the `remember` Claude Code marketplace plugin? Disable it first (`/plugin`), or both will save the same sessions twice. The on-disk formats, project slugs, and config keys are all compatible: old in-repo `.remember/` folders keep working with `"data_dir": ".remember"`, external-mode trees keep working with `"data_dir": "~/.remember/{slug}"` (same folder names), or copy their contents into `~/.ostinote/projects/<slug>/`. Old config files can be reused as-is — renamed keys like `ndc_seconds` and `ndc_compression` are still understood — but copy them to ostinote's locations: `~/.remember/config.json` → `~/.ostinote/config.json`, and a per-project `.remember/config.json` → `.ostinote/config.json` (ostinote never reads config from inside the data dir).
+Coming from the `remember` Claude Code marketplace plugin? Disable it first (`/plugin`), or both will save the same sessions twice. The on-disk formats, project slugs, and config keys are compatible: old in-repo `.remember/` folders keep working with `"data_dir": ".remember"`, and external-mode trees can be copied into `~/.ostinote/projects/<slug>/`. Copy config to ostinote's locations (`~/.remember/config.json` -> `~/.ostinote/config.json`, per-project `.remember/config.json` -> `.ostinote/config.json`), and inspect any migrated memory before injecting it into fresh sessions.
 
 ## Relationship to claude-remember
 

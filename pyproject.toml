@@ -14,8 +14,15 @@ classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Environment :: Console",
     "Intended Audience :: Developers",
+    "Operating System :: MacOS",
     "Operating System :: OS Independent",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: Microsoft :: Windows",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Programming Language :: Python :: 3 :: Only",
     "Topic :: Software Development",
 ]
@@ -25,6 +32,7 @@ Homepage = "https://github.com/adrienkohlbecker/ostinote"
 Repository = "https://github.com/adrienkohlbecker/ostinote"
 Issues = "https://github.com/adrienkohlbecker/ostinote/issues"
 Changelog = "https://github.com/adrienkohlbecker/ostinote/releases"
+Security = "https://github.com/adrienkohlbecker/ostinote/security/policy"
 
 [project.scripts]
 ostinote = "ostinote.cli:main"

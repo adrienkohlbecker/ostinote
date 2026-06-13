@@ -18,7 +18,7 @@ outputs = { auto = true }
 [tasks.test]
 description = "Run the pytest suite"
 depends = ["setup"]
-run = 'pytest -q "$@"'
+run = "pytest -q"
 
 [tasks.lint]
 description = "Check lint and formatting (what CI runs)"
@@ -27,13 +27,14 @@ run = ["ruff check .", "ruff format --check ."]
 
 [tasks.fix]
 description = "Auto-fix lint findings and reformat"
+depends = ["setup"]
 run = ["ruff check --fix .", "ruff format ."]
 
 [tasks.build]
 description = "Build sdist and wheel into dist/ and validate PyPI metadata"
 # twine comes from the locked `release` dependency group: an unpinned uvx
 # fetch in the release path is an unnecessary supply-chain trust grant
-run = ["rm -rf dist", "uv build", "uv run --locked --only-group release twine check dist/*"]
+run = ["rm -rf dist", "uv build", "uv run --locked --only-group release twine check --strict dist/*"]
 
 [tasks.install]
 description = "(Re)install the global `ostinote` CLI from this checkout (editable)"
@@ -46,8 +47,8 @@ run = "uv tool uninstall ostinote"
 # Parser debugging: print what the extractor sees, no model call, no writes.
 [tasks."dry:claude"]
 description = "Dry-run extraction of the latest Claude session for this project"
-run = 'ostinote save --dry --agent claude "$@"'
+run = "ostinote save --dry --agent claude"
 
 [tasks."dry:codex"]
 description = "Dry-run extraction of the latest Codex session for this project"
-run = 'ostinote save --dry --agent codex "$@"'
+run = "ostinote save --dry --agent codex"
