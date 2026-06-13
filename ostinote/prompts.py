@@ -42,7 +42,14 @@ def build_compress_prompt(now_content: str) -> str:
     return _render("compress-daily.prompt.txt", {"NOW_CONTENT": now_content})
 
 
-def build_consolidation_prompt(staging: dict[str, str], recent: str, archive: str, core: str) -> str:
+def build_consolidation_prompt(
+    staging: dict[str, str],
+    recent: str,
+    archive: str,
+    core: str,
+    today: str,
+    archive_cutoff: str,
+) -> str:
     """Prompt asking the model to fold staging logs into recent.md/archive.md.
 
     Each staging file is wrapped in a labeled ``<staging_file>`` tag rather
@@ -59,5 +66,7 @@ def build_consolidation_prompt(staging: dict[str, str], recent: str, archive: st
             "RECENT": recent,
             "ARCHIVE": archive,
             "CORE": core or "(empty)",
+            "TODAY": today,
+            "ARCHIVE_CUTOFF": archive_cutoff,
         },
     )

@@ -31,8 +31,13 @@ def test_build_consolidation_prompt_tags_staging_files():
         recent="# Recent",
         archive="# Archive",
         core="",
+        today="2026-06-12",
+        archive_cutoff="2026-06-09",
     )
+    assert "Consolidation date: 2026-06-12" in prompt
+    assert "Archive cutoff: 2026-06-09" in prompt
     assert '<staging_file name="today-2026-06-10.md">\nB\n</staging_file>' in prompt
     assert '<staging_file name="today-2026-06-11.md">\n## 09:00 | main\n---\nA\n</staging_file>' in prompt
     assert prompt.index("today-2026-06-10.md") < prompt.index("today-2026-06-11.md")
     assert "(empty)" in prompt
+    assert "Use the date encoded in the enclosing `today-YYYY-MM-DD.md` staging filename exactly" in prompt

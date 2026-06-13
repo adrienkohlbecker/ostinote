@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import re
 import time
+from datetime import date, timedelta
 
 from . import prompts, summarize
 from .agents import get_agent
@@ -279,8 +280,19 @@ def run_consolidation(env: Env) -> int:
         cfg = dict(env.cfg)
         cfg["summarizer"] = dict(env.cfg["summarizer"])
         cfg["summarizer"]["timeout"] = max(180, cfg["summarizer"]["timeout"])
+        today = env.today()
         try:
-            result = summarize.call_model(prompts.build_consolidation_prompt(contents, recent, archive, core), cfg)
+            result = summarize.call_model(
+                prompts.build_consolidation_prompt(
+                    contents,
+                    recent,
+                    archive,
+                    core,
+                    today=today,
+                    archive_cutoff=_archive_cutoff(today),
+                ),
+                cfg,
+            )
         except RuntimeError as e:
             env.log("consolidation", "ERROR: %s" % e)
             return 1
@@ -346,6 +358,11 @@ def parse_consolidation_response(text: str):
     if archive and not archive.startswith("# Archive"):
         archive = "# Archive\n\n" + archive
     return recent, archive, core
+
+
+def _archive_cutoff(today: str) -> str:
+    """Return the newest date that should age from recent.md into archive.md."""
+    return (date.fromisoformat(today) - timedelta(days=3)).isoformat()
 
 
 _CORE_LINE_RE = re.compile(r"^- \d{4}-\d{2}-\d{2}: \S")

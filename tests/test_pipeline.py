@@ -236,10 +236,12 @@ def test_run_consolidation_writes_sections_and_marks_staging_done(tmp_path, monk
     """Consolidate a past daily memory file with a fake model response.
 
     Expected: recent and archive files are replaced from the parsed sections,
-    new core memory text is appended, the prompt includes the staging filename,
-    and the processed daily file is renamed to `.done.md`.
+    new core memory text is appended, the prompt includes the staging filename
+    plus deterministic date/cutoff context, and the processed daily file is
+    renamed to `.done.md`.
     """
     env = make_project_env()
+    monkeypatch.setattr(env, "today", lambda: "2026-06-12")
     staging = _seed_consolidation(tmp_path, env)
     seen = {}
 
@@ -258,6 +260,8 @@ def test_run_consolidation_writes_sections_and_marks_staging_done(tmp_path, monk
     assert pipeline_mod.run_consolidation(env) == 0
 
     assert "today-2000-01-01.md" in seen["prompt"]
+    assert "Consolidation date: 2026-06-12" in seen["prompt"]
+    assert "Archive cutoff: 2026-06-09" in seen["prompt"]
     assert seen["timeout"] >= 180
     assert (tmp_path / "data" / "recent.md").read_text(encoding="utf-8") == "# Recent\n\nnew recent\n"
     assert (tmp_path / "data" / "archive.md").read_text(encoding="utf-8") == "# Archive\n\nnew archive\n"
