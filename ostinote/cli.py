@@ -25,7 +25,9 @@ are logged to ``HOOK_ERRORS_PATH`` instead of surfacing.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import importlib.metadata
+import io
 import os
 import sys
 import time
@@ -75,6 +77,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ostinote",
         description="Continuous memory for coding agents (Claude Code, Codex).",
+        allow_abbrev=False,
         **extra,
     )
     # The installed distribution is the single source of the version; falls
@@ -86,12 +89,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version="%(prog)s " + version)
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_hook = sub.add_parser("hook", help="lifecycle hook entry points")
+    p_hook = sub.add_parser("hook", help="lifecycle hook entry points", allow_abbrev=False)
     p_hook.add_argument("event", choices=["session-start", "post-tool", "session-end"])
     p_hook.add_argument("--agent", required=True, choices=agent_names())
     p_hook.set_defaults(func=_cmd_hook)
 
-    p_save = sub.add_parser("save", help="save a session into memory")
+    p_save = sub.add_parser("save", help="save a session into memory", allow_abbrev=False)
     p_save.add_argument("--agent", default="claude", choices=agent_names())
     p_save.add_argument("--session", default=None)
     p_save.add_argument("--transcript", default=None)
@@ -106,22 +109,22 @@ def _build_parser() -> argparse.ArgumentParser:
     p_save.add_argument("--dry", action="store_true", help="print the extract, skip the model call")
     p_save.set_defaults(func=_cmd_save)
 
-    p_cons = sub.add_parser("consolidate", help="compress past days into recent/archive")
+    p_cons = sub.add_parser("consolidate", help="compress past days into recent/archive", allow_abbrev=False)
     _add_cwd(p_cons)
     p_cons.set_defaults(func=_cmd_consolidate)
 
-    p_status = sub.add_parser("status", help="show memory state")
+    p_status = sub.add_parser("status", help="show memory state", allow_abbrev=False)
     _add_cwd(p_status)
     p_status.add_argument("--costs", action="store_true", help="show per-day token usage and cost instead")
     p_status.set_defaults(func=_cmd_status)
 
-    p_doctor = sub.add_parser("doctor", help="check the whole pipeline, loudly")
+    p_doctor = sub.add_parser("doctor", help="check the whole pipeline, loudly", allow_abbrev=False)
     _add_cwd(p_doctor)
     p_doctor.add_argument("--live", action="store_true", help="also run one real (paid) summarizer call")
     p_doctor.set_defaults(func=_cmd_doctor)
 
     for name in ("install", "uninstall"):
-        p = sub.add_parser(name, help="%s hooks for an agent" % name)
+        p = sub.add_parser(name, help="%s hooks for an agent" % name, allow_abbrev=False)
         p.add_argument("agent", choices=agent_names() + ["all"])
         scope = p.add_mutually_exclusive_group()
         scope.add_argument(
@@ -156,13 +159,15 @@ def _hook_main(argv: list[str]) -> int:
     such as a stale binary being fed an event name it doesn't know yet — is
     appended to the hook error log and the process still exits 0.
     """
+    parse_stderr = io.StringIO()
     try:
-        args = _build_parser().parse_args(argv)
+        with contextlib.redirect_stderr(parse_stderr):
+            args = _build_parser().parse_args(argv)
         args.func(args)
     except SystemExit as e:
         # argparse raises SystemExit(0) for --help; only log real failures.
         if e.code not in (0, None):
-            _log_hook_failure(argv)
+            _log_hook_failure(argv, parse_stderr.getvalue())
     except Exception:
         _log_hook_failure(argv)
     return 0
@@ -179,7 +184,7 @@ def _cmd_hook(args) -> int:
     return 0
 
 
-def _log_hook_failure(argv: list[str]) -> None:
+def _log_hook_failure(argv: list[str], diagnostic: str = "") -> None:
     """Append the active exception to the hook error log, best effort.
 
     Hooks are silent by design, so this log is their only failure surface.
@@ -193,7 +198,8 @@ def _log_hook_failure(argv: list[str]) -> None:
     if len(lines) > _TRACEBACK_TAIL_LINES:
         dropped = len(lines) - _TRACEBACK_TAIL_LINES
         tb = "\n".join(["... (%d traceback lines truncated) ..." % dropped, *lines[-_TRACEBACK_TAIL_LINES:]])
-    entry = "[%s %s]\n%s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), " ".join(argv), tb)
+    diagnostic_block = "argparse:\n%s\n" % diagnostic.rstrip() if diagnostic else ""
+    entry = "[%s %s]\n%s%s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), " ".join(argv), diagnostic_block, tb)
     try:
         os.makedirs(os.path.dirname(env_mod.HOOK_ERRORS_PATH), mode=0o700, exist_ok=True)
         fd = os.open(env_mod.HOOK_ERRORS_PATH, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
@@ -253,8 +259,11 @@ def _status(env: Env) -> None:
         env.recent_file,
         env.archive_file,
     ):
-        if os.path.exists(path):
-            print("  %-22s %6d bytes" % (os.path.basename(path), os.path.getsize(path)))
+        try:
+            size = os.stat(path).st_size
+        except OSError:
+            continue
+        print("  %-22s %6d bytes" % (os.path.basename(path), size))
     staging = pipeline.staging_files(env)
     if staging:
         print("  %d past day(s) awaiting consolidation" % len(staging))
@@ -263,17 +272,26 @@ def _status(env: Env) -> None:
 
     states = all_states(env.sessions_dir)
     print("tracked sessions: %d" % len(states))
-    for state in sorted(states, key=lambda s: s.last_attempt_ts, reverse=True)[:10]:
-        age = time.time() - state.last_attempt_ts if state.last_attempt_ts else None
+    for state in sorted(states, key=lambda s: max(s.last_attempt_ts, s.last_save_ts), reverse=True)[:10]:
+        now = time.time()
+        saved = _age_text("saved", now - state.last_save_ts) if state.last_save_ts else "never saved"
+        attempted = ""
+        if state.last_attempt_ts > state.last_save_ts:
+            attempted = ", " + _age_text("attempted", now - state.last_attempt_ts)
         print(
             "  %-7s %s  line %-6d %s"
             % (
                 state.agent,
                 state.session_id[:24],
                 state.line,
-                "saved %dm ago" % (age // 60) if age is not None else "never saved",
+                saved + attempted,
             )
         )
+
+
+def _age_text(label: str, seconds: float) -> str:
+    """Return a short age label for status output."""
+    return "%s %dm ago" % (label, int(max(0, seconds) // 60))
 
 
 def _costs(env: Env) -> None:

@@ -3,6 +3,7 @@ import os
 import shlex
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -120,6 +121,25 @@ def test_cli_status_costs_functional_reports_day_totals(tmp_path):
     rows = {line.split()[0]: line.split() for line in result.stdout.splitlines() if line.strip()}
     assert rows["2026-06-09"] == ["2026-06-09", "2", "300", "50", "60", "$0.0001"]
     assert rows["total"] == ["total", "2", "300", "50", "60", "$0.0001"]
+
+
+def test_cli_hook_bad_arguments_functional_is_quiet(tmp_path):
+    """Run a malformed hook through the real `python -m ostinote` entrypoint.
+
+    Expected: even the subprocess path exits 0 without stdout/stderr noise, and
+    the parse failure is still available in the private hook error log.
+    """
+    proj, _data, env, _prompt_log = functional_cli_project(tmp_path)
+
+    result = run_cli(["hook", "no-such-event", "--agent", "codex"], proj, env)
+
+    assert result.returncode == 0
+    assert result.stdout == ""
+    assert result.stderr == ""
+    errors = Path(env["HOME"]) / ".ostinote" / "hook-errors.log"
+    text = errors.read_text(encoding="utf-8")
+    assert "hook no-such-event --agent codex" in text
+    assert "invalid choice: 'no-such-event'" in text
 
 
 @pytest.mark.skipif(os.name == "nt", reason="drives the hook through a #!/bin/sh wrapper and POSIX shlex quoting")

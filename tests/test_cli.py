@@ -4,6 +4,7 @@ import subprocess
 import pytest
 
 from ostinote import cli as cli_mod
+from ostinote.state import SessionState
 
 # --- CLI ------------------------------------------------------------------------------
 
@@ -101,20 +102,56 @@ def test_cli_hook_failures_are_logged_and_swallowed(tmp_path, monkeypatch):
         assert errors.stat().st_mode & 0o777 == 0o600
 
 
-def test_cli_hook_bad_arguments_still_exit_zero(tmp_path, monkeypatch):
+def test_cli_hook_bad_arguments_still_exit_zero(tmp_path, monkeypatch, capsys):
     """Shield hook invocations from argparse failures, not just handler ones.
 
     Expected: argparse exits 2 on unknown arguments, which Claude Code treats
     as a blocking hook error — e.g. a stale binary fed an event name a newer
-    install wrote — so for `hook` commands main() logs the failure and returns
-    0 instead.
+    install wrote — so for `hook` commands main() logs the failure quietly and
+    returns 0 instead.
     """
     errors = tmp_path / "hook-errors.log"
     monkeypatch.setattr(cli_mod.env_mod, "HOOK_ERRORS_PATH", str(errors))
 
     assert cli_mod.main(["hook", "no-such-event", "--agent", "codex"]) == 0
 
-    assert "hook no-such-event --agent codex" in errors.read_text(encoding="utf-8")
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+    text = errors.read_text(encoding="utf-8")
+    assert "hook no-such-event --agent codex" in text
+    assert "invalid choice: 'no-such-event'" in text
+
+
+def test_cli_rejects_abbreviated_options(tmp_path):
+    """Reject long-option prefixes instead of accepting typo-shaped commands."""
+    with pytest.raises(SystemExit) as exc:
+        cli_mod.main(["save", "--agen", "codex", "--cwd", str(tmp_path)])
+
+    assert exc.value.code == 2
+
+
+def test_cli_status_distinguishes_attempted_from_saved(make_project_env, monkeypatch, capsys):
+    """Report real save time separately from newer save attempts.
+
+    Expected: a session with a failed/skipped attempt after its last successful
+    save still says when it was actually saved, then separately notes the newer
+    attempt.
+    """
+    env = make_project_env()
+    now = 1_000_000.0
+    state = SessionState.load(env.sessions_dir, "codex", "attempted-session")
+    state.line = 12
+    state.last_save_ts = now - 600
+    state.last_attempt_ts = now - 60
+    state.save()
+    monkeypatch.setattr(cli_mod.time, "time", lambda: now)
+
+    assert cli_mod.main(["status", "--cwd", env.cwd]) == 0
+
+    output = capsys.readouterr().out
+    assert "attempted-session" in output
+    assert "saved 10m ago, attempted 1m ago" in output
 
 
 def test_cli_install_propagates_failure_exit_code(tmp_path, capsys, installer_env):
