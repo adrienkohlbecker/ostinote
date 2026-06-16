@@ -18,7 +18,6 @@ Treat this as infrastructure for agent memory: keep behavior predictable, preser
 ## Code Conventions
 
 - Keep changes small and behavior-focused; this project is intentionally a compact single-package CLI.
-- Prefer standard-library APIs and structured parsers over shell snippets or ad hoc string manipulation.
 - Preserve compatibility with existing on-disk memory formats and legacy config keys unless the user explicitly asks for a breaking migration.
 - Be careful around hook installers: validate config writes, avoid clobbering unrelated user hooks, and fail closed on malformed config.
 - When touching transcript parsing, state tracking, recovery, consolidation, or installer behavior, add or update regression tests in the relevant `tests/test_<area>.py` module.
