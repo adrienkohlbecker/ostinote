@@ -40,7 +40,9 @@ ostinote = "ostinote.cli:main"
 # PEP 735 dependency groups: repo-local tooling, not published as extras.
 # Exact versions are pinned by uv.lock; run via `uv run --locked`.
 [dependency-groups]
-dev = ["pytest", "pytest-timeout", "ruff"]
+# pyright[nodejs] bundles the Node runtime as a locked wheel instead of
+# fetching one from the network on first run.
+dev = ["pytest", "pytest-timeout", "ruff", "pyright[nodejs]"]
 release = ["twine"]
 
 [build-system]
@@ -78,6 +80,12 @@ convention = "pep257"
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["D"]
+
+# Pylance is built on pyright, so this keeps CLI checks aligned with the editor.
+[tool.pyright]
+include = ["ostinote", "tests"]
+venvPath = "."
+venv = ".venv"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

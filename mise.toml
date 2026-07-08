@@ -23,7 +23,7 @@ run = "pytest -q"
 [tasks.lint]
 description = "Check lint and formatting (what CI runs)"
 depends = ["setup"]
-run = ["ruff check .", "ruff format --check ."]
+run = ["ruff check .", "ruff format --check .", "pyright"]
 
 [tasks.fix]
 description = "Auto-fix lint findings and reformat"
