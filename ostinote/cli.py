@@ -32,6 +32,7 @@ import os
 import sys
 import time
 import traceback
+from typing import Any
 
 from . import costs as costs_mod
 from . import doctor as doctor_mod
@@ -73,7 +74,9 @@ def _build_parser() -> argparse.ArgumentParser:
     """Build the argparse tree; each subparser binds its handler via ``func``."""
     # suggest_on_error / color shipped in Python 3.14; older interpreters
     # (requires-python is 3.11) get the plain parser.
-    extra: dict[str, bool] = {"suggest_on_error": True, "color": True} if sys.version_info >= (3, 14) else {}
+    # dict[str, Any] because the splat below must not pin these keys to bool
+    # in the eyes of the type checker (ArgumentParser has no **kwargs).
+    extra: dict[str, Any] = {"suggest_on_error": True, "color": True} if sys.version_info >= (3, 14) else {}
     parser = argparse.ArgumentParser(
         prog="ostinote",
         description="Continuous memory for coding agents (Claude Code, Codex).",

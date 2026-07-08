@@ -2,11 +2,13 @@ import json
 import os
 import time
 import types
+from typing import cast
 
 import pytest
 
 from ostinote import hooks as hooks_mod
 from ostinote.agents import codex as codex_mod
+from ostinote.env import Env
 from ostinote.state import SessionState
 from tests.helpers import age_file, expected_slug, hook_stdin
 
@@ -475,7 +477,8 @@ def _recovery_env(tmp_path):
     A full Env would drag in config loading and data-dir resolution that the
     recovery-selection tests don't exercise.
     """
-    return types.SimpleNamespace(sessions_dir=str(tmp_path / "sessions"), cwd=str(tmp_path), log=lambda *_args: None)
+    stub = types.SimpleNamespace(sessions_dir=str(tmp_path / "sessions"), cwd=str(tmp_path), log=lambda *_args: None)
+    return cast(Env, stub)
 
 
 def _recovery_transcript(env, name="session.jsonl", lines=2, age=None, cwd=None):
