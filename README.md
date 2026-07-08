@@ -7,7 +7,7 @@
 
 **Shared, persistent memory for your coding agents.** Works with both **Claude Code** and **Codex CLI** at the same time, in the same project — every session starts already knowing what you worked on yesterday, what decisions were made, and what's next.
 
-Coding agents start every session blank. You re-explain the project, the conventions, the thing that broke last Tuesday. `ostinote` fixes that: it quietly captures your sessions as you work, compresses them into short daily summaries using Claude Haiku (a few cents per day), and injects them back into context whenever a new session starts — no matter which agent you open.
+Coding agents start every session blank. You re-explain the project, the conventions, the thing that broke last Tuesday. `ostinote` fixes that: it quietly captures your sessions as you work, compresses them into short daily summaries using Claude Haiku (a few cents per day; codex-only setups summarize with Codex instead), and injects them back into context whenever a new session starts — no matter which agent you open.
 
 > **The name:** an *ostinato* is a musical motif that persists, repeating underneath everything else in a piece. Cross it with *note* — a written one — and you get **ostinote**: a persistent note running under all your sessions.
 
@@ -32,7 +32,7 @@ ostinote install codex
 # 3. Done. Work normally — memory accumulates in ~/.ostinote/projects/<project-slug>/
 ```
 
-**Requirements:** Python 3.11+ and the `claude` CLI (used for summarization, with Haiku). Works on macOS and Linux; Windows is supported in the code (no bash needed) but has not seen much real-world testing yet.
+**Requirements:** Python 3.11+ and the `claude` CLI or the `codex` CLI — either one doubles as the summarizer (claude with Haiku is preferred when both are installed; see `summarizer.engine` in [Configuration](#configuration)). Works on macOS and Linux; Windows is supported in the code (no bash needed) but has not seen much real-world testing yet.
 
 By default your memory lives **outside** your repos, in `~/.ostinote/projects/<project-slug>/` (one folder per project), so it does not show up in repo diffs or your agent's review UI. Prefer it in-repo? Set `"data_dir": ".ostinote"` (see [Configuration](#configuration)), keep that directory untracked, and treat anything inside it as future prompt input.
 
@@ -51,6 +51,8 @@ Codex will ask you to trust the new hooks once on its next start.
 | Remove the CLI | `uv tool uninstall ostinote` | Hooks already registered in agent configs are not removed automatically |
 
 Use `ostinote status` to locate the memory directory before deleting old data manually. Codex installs add the memory directory to `sandbox_workspace_write.writable_roots`; uninstall leaves that grant in place intentionally so existing memory remains usable until you remove the entry yourself.
+
+Release notes live in [CHANGELOG.md](CHANGELOG.md) and on the [releases page](https://github.com/adrienkohlbecker/ostinote/releases).
 
 ## Privacy and data flow
 
