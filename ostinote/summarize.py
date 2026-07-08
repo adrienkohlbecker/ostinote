@@ -1,10 +1,13 @@
 """Summarizer-model wrapper.
 
-Default engine is the Claude CLI with Haiku, sandboxed: no tools, one turn,
-no session persistence, cwd in the system temp dir, prompt piped on stdin.
-The full argv can be overridden via the ``summarizer.command`` config key,
-so a different engine (e.g. ``codex exec``) can be swapped in as long as it
-prints the response text (claude-style JSON is also understood).
+Two built-in engines, both sandboxed with cwd in the system temp dir and the
+prompt piped on stdin: the Claude CLI with Haiku (no tools, one turn, no
+session persistence) and the Codex CLI (read-only sandbox, ephemeral, low
+reasoning effort). The ``summarizer.engine`` config key picks one explicitly;
+the default auto-detects, preferring claude and falling back to codex for
+codex-only setups. The full argv can also be overridden via the
+``summarizer.command`` config key, as long as the command prints the response
+text (claude-style JSON and codex ``--json`` event lines are also understood).
 """
 
 from __future__ import annotations
@@ -35,6 +38,21 @@ DEFAULT_COMMAND = [
     "--strict-mcp-config",
 ]
 
+DEFAULT_COMMAND_CODEX = [
+    "codex",
+    "exec",
+    "--json",
+    "--sandbox",
+    "read-only",
+    "--skip-git-repo-check",
+    "--ephemeral",
+    "--color",
+    "never",
+    "-c",
+    "model_reasoning_effort=low",
+    "-",
+]
+
 
 @dataclass
 class TokenUsage:
@@ -55,12 +73,34 @@ class ModelResult:
     is_skip: bool
 
 
+def resolve_command(cfg: dict) -> list[str]:
+    """Return the summarizer argv this config resolves to.
+
+    An explicit ``summarizer.command`` always wins. Otherwise
+    ``summarizer.engine`` picks a built-in command; the auto default prefers
+    claude and falls back to codex, so codex-only machines work without any
+    config. When neither CLI is installed the claude command is returned so
+    the eventual "not found" error names the primary engine.
+    """
+    command = cfg["summarizer"]["command"]
+    if command:
+        return list(command)
+    engine = cfg["summarizer"].get("engine", "")
+    if engine == "claude":
+        return list(DEFAULT_COMMAND)
+    if engine == "codex":
+        return list(DEFAULT_COMMAND_CODEX)
+    if not shutil.which("claude") and shutil.which("codex"):
+        return list(DEFAULT_COMMAND_CODEX)
+    return list(DEFAULT_COMMAND)
+
+
 def call_model(prompt: str, cfg: dict) -> ModelResult:
     """Run the summarizer and return its parsed response.
 
     Raises RuntimeError on timeout, non-zero exit, or unparseable output.
     """
-    command = list(cfg["summarizer"]["command"] or DEFAULT_COMMAND)
+    command = resolve_command(cfg)
     timeout = cfg["summarizer"]["timeout"]
 
     # Resolve the executable explicitly — on Windows, npm shims like
@@ -69,10 +109,15 @@ def call_model(prompt: str, cfg: dict) -> ModelResult:
     if resolved:
         command[0] = resolved
 
-    # Safety net for custom summarizer.command values: a claude invocation
-    # must never persist its transcript into ~/.claude/projects/.
-    if os.path.basename(command[0]).startswith("claude") and "--no-session-persistence" not in command:
+    # Safety net for custom summarizer.command values: the summarizer prompt
+    # contains extracted transcript content, so a claude invocation must never
+    # persist it into ~/.claude/projects/, and a codex invocation must never
+    # persist it into ~/.codex/sessions/.
+    executable = os.path.basename(command[0])
+    if executable.startswith("claude") and "--no-session-persistence" not in command:
         command.append("--no-session-persistence")
+    if executable.startswith("codex") and "--ephemeral" not in command:
+        command.append("--ephemeral")
 
     # CLAUDECODE blocks nested claude sessions when run from a Claude hook.
     env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
@@ -100,11 +145,14 @@ def call_model(prompt: str, cfg: dict) -> ModelResult:
 
 
 def parse_response(raw: str) -> ModelResult:
-    """Parse summarizer stdout — claude JSON (dict or list) or plain text."""
+    """Parse summarizer stdout — claude JSON (dict or list), codex ``--json`` event lines, or plain text."""
     raw = raw.strip()
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
+        jsonl = _parse_jsonl(raw)
+        if jsonl is not None:
+            return jsonl
         # Plain-text engine: take stdout verbatim.
         return ModelResult(text=raw, tokens=TokenUsage(), is_skip=raw.upper().startswith("SKIP"))
 
@@ -133,6 +181,44 @@ def parse_response(raw: str) -> ModelResult:
     else:
         text, tokens = str(data), TokenUsage()
 
+    return ModelResult(text=text, tokens=tokens, is_skip=text.strip().upper().startswith("SKIP"))
+
+
+def _parse_jsonl(raw: str) -> ModelResult | None:
+    """Parse codex ``exec --json`` output: one event object per line.
+
+    The response text comes from the last ``item.completed`` event holding an
+    ``agent_message`` item; token usage from the ``turn.completed`` event.
+    Returns None when the input is not a stream of JSON objects, so
+    ``parse_response`` can fall back to treating stdout as plain text.
+    """
+    text = ""
+    tokens = TokenUsage()
+    saw_event = False
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(event, dict):
+            return None
+        saw_event = True
+        item = event.get("item")
+        if event.get("type") == "item.completed" and isinstance(item, dict) and item.get("type") == "agent_message":
+            if isinstance(item.get("text"), str):
+                text = item["text"]
+        usage = event.get("usage")
+        if event.get("type") == "turn.completed" and isinstance(usage, dict):
+            tokens = TokenUsage(
+                input=usage.get("input_tokens", 0) or 0,
+                output=usage.get("output_tokens", 0) or 0,
+                cache=usage.get("cached_input_tokens", 0) or 0,
+            )
+    if not saw_event:
+        return None
     return ModelResult(text=text, tokens=tokens, is_skip=text.strip().upper().startswith("SKIP"))
 
 

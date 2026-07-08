@@ -25,18 +25,19 @@ Only the latest release receives security fixes.
 
 ## Expected behavior
 
-`ostinote` runs a summarizer (by default the `claude` CLI) over your session
-transcripts and writes memory files under `~/.ostinote/projects/<slug>/` by
-default (or `<project>/.ostinote/` if configured in-repo); hook crashes are
-logged to `~/.ostinote/hook-errors.log`. It executes no remote code and opens
-no network listeners of its own, but note that the default summarizer sends
-the extracted conversation content to the Anthropic API — only the
-orchestration is local.
+`ostinote` runs a summarizer (by default the `claude` CLI, or the `codex` CLI
+when only codex is installed) over your session transcripts and writes memory
+files under `~/.ostinote/projects/<slug>/` by default (or
+`<project>/.ostinote/` if configured in-repo); hook crashes are logged to
+`~/.ostinote/hook-errors.log`. It executes no remote code and opens no network
+listeners of its own, but note that the default summarizer sends the extracted
+conversation content to the Anthropic API (or the OpenAI API via codex) — only
+the orchestration is local.
 
 These are not vulnerabilities by themselves:
 
-- transcript content leaving the machine through the default `claude`
-  summarizer;
+- transcript content leaving the machine through the default `claude` or
+  `codex` summarizer;
 - a trusted user-configured `summarizer.command` running with the user's
   privileges and receiving extracted transcript content on stdin;
 - user-chosen in-repo memory directories that are private and untracked;
@@ -57,6 +58,7 @@ The most sensitive surfaces, where reports are especially welcome:
   session of both agents, so anything that lets a poisoned session or a write
   to the memory directory persist instructions across sessions matters;
 - per-project `.ostinote/config.json`, which arrives with a cloned repo and is
-  therefore treated as untrusted (e.g. it may not set `summarizer.command`);
+  therefore treated as untrusted (e.g. it may not set `summarizer.command` or
+  `summarizer.engine`);
 - path traversal, symlink following, hook clobbering, secret leakage, or unsafe
   log permissions across any of the files above.

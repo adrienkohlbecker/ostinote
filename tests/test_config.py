@@ -97,6 +97,38 @@ def test_project_config_cannot_set_summarizer_command(tmp_path, monkeypatch):
     assert ("data_dir",) not in guarded
 
 
+def test_project_config_cannot_set_summarizer_engine(tmp_path, monkeypatch):
+    """Ignore an untrusted project config that tries to pick the engine.
+
+    Expected: a cloned repo's `.ostinote/config.json` cannot flip
+    `summarizer.engine` (which decides where transcript content is sent), while
+    the trusted user layer may set it freely.
+    """
+    monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", str(tmp_path / "user.json"))
+    (tmp_path / "user.json").write_text(json.dumps({"summarizer": {"engine": "codex"}}))
+    proj = project_with_config(tmp_path, {"summarizer": {"engine": "claude"}})
+
+    report = config_mod.load_report(str(proj))
+    assert report.config["summarizer"]["engine"] == "codex"
+    assert any(issue.key == "summarizer.engine" and issue.level == "warn" for issue in report.issues)
+
+
+def test_config_rejects_unknown_summarizer_engine(tmp_path, monkeypatch):
+    """Fall back to auto-detection when engine names an unknown value.
+
+    Expected: a typo like "gemini" is dropped with a FAIL issue instead of
+    reaching resolve_command, where it would silently behave like auto.
+    """
+    monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", str(tmp_path / "user.json"))
+    (tmp_path / "user.json").write_text(json.dumps({"summarizer": {"engine": "gemini"}}))
+    proj = tmp_path / "proj"
+    proj.mkdir()
+
+    report = config_mod.load_report(str(proj))
+    assert report.config["summarizer"]["engine"] == ""
+    assert any(issue.key == "summarizer.engine" and issue.level == "FAIL" for issue in report.issues)
+
+
 def test_config_invalid_shapes_and_project_cost_controls_fall_back(tmp_path, monkeypatch):
     """Ignore config values that would crash hooks or amplify model calls.
 

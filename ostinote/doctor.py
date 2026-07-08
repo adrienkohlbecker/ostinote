@@ -177,7 +177,7 @@ def _check_codex_writable_roots(scopes: set[str], env: Env, results: list) -> No
 
 
 def _check_summarizer(env: Env, results: list, live: bool) -> None:
-    command = list(env.cfg["summarizer"]["command"] or summarize.DEFAULT_COMMAND)
+    command = summarize.resolve_command(env.cfg)
     if shutil.which(command[0]):
         results.append(("ok", "summarizer executable found: %s" % command[0]))
     else:

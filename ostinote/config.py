@@ -48,8 +48,12 @@ DEFAULTS: dict = {
         "consolidation": True,
     },
     "summarizer": {
+        # Which built-in summarizer CLI to use: "claude", "codex", or
+        # "" / "auto" to prefer claude and fall back to codex when only
+        # codex is installed. Ignored when "command" is set.
+        "engine": "",
         # Override the summarizer invocation entirely (list of argv strings).
-        # The prompt is always piped on stdin. Empty = built-in claude/haiku.
+        # The prompt is always piped on stdin. Empty = built-in engine above.
         "command": [],
         "timeout": 120,
     },
@@ -71,12 +75,18 @@ LEGACY_KEYS = {
 #   - ``summarizer.command`` is executed as a subprocess on every save, so a
 #     cloned repo setting it is straightforward remote code execution. It is
 #     stripped from the project layer outright (no legitimate per-repo use).
+#   - ``summarizer.engine`` only picks between the built-in sandboxed
+#     commands, but that choice decides which model vendor receives extracted
+#     transcript content — not a cloned repo's call to make.
 #   - ``data_dir`` decides where memory is written and what the Codex installer
 #     grants sandbox write access to. It stays settable per-project (the in-repo
 #     ``.ostinote`` workflow needs it) but is flagged so ``Env`` can reject a
 #     value that escapes the repo or the user's ostinote home.
-# User-level config is trusted and may set either freely.
-_PROJECT_DENIED = (("summarizer", "command"),)
+# User-level config is trusted and may set any of them freely.
+_PROJECT_DENIED = {
+    ("summarizer", "command"): "it can execute commands",
+    ("summarizer", "engine"): "it chooses where transcript content is sent",
+}
 _PROJECT_GUARDED = (("data_dir",),)
 _PROJECT_MINIMUMS = {
     ("cooldowns", "save_seconds"): DEFAULTS["cooldowns"]["save_seconds"],
@@ -240,7 +250,7 @@ def _validate_layer(cfg: dict, defaults: dict, source: str, file_path: str, issu
                     "warn",
                     file_path,
                     _dotted(key_path),
-                    "project config setting ignored because it can execute commands",
+                    "project config setting ignored because %s" % _PROJECT_DENIED[key_path],
                 )
             )
             continue
@@ -270,6 +280,16 @@ def _validate_layer(cfg: dict, defaults: dict, source: str, file_path: str, issu
             continue
         if key_path == ("time_format",) and value not in ("24h", "12h"):
             issues.append(ConfigIssue("FAIL", file_path, "time_format", "expected 24h or 12h, using default value"))
+            continue
+        if key_path == ("summarizer", "engine") and value not in ("", "auto", "claude", "codex"):
+            issues.append(
+                ConfigIssue(
+                    "FAIL",
+                    file_path,
+                    _dotted(key_path),
+                    "expected auto, claude, or codex, using default value",
+                )
+            )
             continue
         if isinstance(value, (int, float)) and key_path in _PROJECT_MINIMUMS and source == "project":
             minimum = _PROJECT_MINIMUMS[key_path]

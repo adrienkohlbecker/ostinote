@@ -54,13 +54,13 @@ Use `ostinote status` to locate the memory directory before deleting old data ma
 
 ## Privacy and data flow
 
-`ostinote` reads agent transcripts, extracts the new human/assistant conversation, and sends that extract to the configured summarizer. The default summarizer is the `claude` CLI with Haiku, so extracted conversation content leaves your machine for Anthropic's API. The orchestration is local, but the default model call is not.
+`ostinote` reads agent transcripts, extracts the new human/assistant conversation, and sends that extract to the configured summarizer. The default summarizer is the `claude` CLI with Haiku when it is installed, falling back to the `codex` CLI on codex-only machines, so extracted conversation content leaves your machine for Anthropic's or OpenAI's API. The orchestration is local, but the default model call is not.
 
 Generated memory and logs are plaintext markdown/text files under the memory directory. They can contain session summaries, local paths, command output, and other sensitive context. `ostinote save --dry` avoids model calls and writes, but it still prints extracted transcript content; redact it before sharing.
 
 Memory files are injected verbatim into future fresh agent sessions. If you choose in-repo memory (`"data_dir": ".ostinote"`) or migrate an old `.remember/` directory, inspect it first, keep it untracked/private, and remember that edits to memory files can influence later sessions.
 
-Only trusted user config (`~/.ostinote/config.json`) may set `summarizer.command`, because that command runs with your user privileges and receives extracted transcript content on stdin. Prefer direct, trusted executables over shell wrappers such as `sh -c`. Per-project config is treated as untrusted and cannot choose the executable.
+Only trusted user config (`~/.ostinote/config.json`) may set `summarizer.command` or `summarizer.engine`, because that command runs with your user privileges and receives extracted transcript content on stdin. Prefer direct, trusted executables over shell wrappers such as `sh -c`. Per-project config is treated as untrusted and cannot choose the executable or which vendor receives the extract.
 
 See [SECURITY.md](SECURITY.md) for the vulnerability-reporting scope.
 
@@ -132,12 +132,13 @@ Optional. Create `~/.ostinote/config.json` (trusted user config, applies everywh
 | `timezone` | system local | IANA zone name (e.g. `America/New_York`) for timestamps and day boundaries |
 | `time_format` | `24h` | `24h` or `12h` timestamps |
 | `share_worktrees` | `true` | Sessions in git worktrees share the main checkout's memory |
-| `summarizer.command` | claude + haiku | Trusted user-config-only argv array for a summarizer that reads a prompt on stdin and prints a response |
+| `summarizer.engine` | auto | Trusted user-config-only choice of built-in summarizer: `claude`, `codex`, or auto (prefer claude, fall back to codex on codex-only machines) |
+| `summarizer.command` | per engine | Trusted user-config-only argv array for a summarizer that reads a prompt on stdin and prints a response; overrides `engine` |
 | `summarizer.timeout` | `120` | Summarizer timeout, seconds |
 
 Less common tuning keys include `cooldowns.save_seconds`, `cooldowns.compress_seconds`, `thresholds.min_human_messages`, `thresholds.delta_lines_trigger`, `features.hourly_compression`, `features.recovery`, `features.consolidation`, and `debug`.
 
-Because a per-project config file arrives with a cloned repo, it is treated as untrusted: `summarizer.command` is ignored there, and a project-set `data_dir` is contained before use.
+Because a per-project config file arrives with a cloned repo, it is treated as untrusted: `summarizer.command` and `summarizer.engine` are ignored there, and a project-set `data_dir` is contained before use.
 
 `ostinote install` also takes `--project` to register hooks for a single project (in `<project>/.claude/settings.json` / `<project>/.codex/hooks.json`) instead of globally. Treat project hook files like executable agent config, review them before committing, and uninstall with the same `--project` scope.
 
