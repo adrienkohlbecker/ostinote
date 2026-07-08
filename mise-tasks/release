@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+#MISE description="Bump the version, update CHANGELOG.md, and create a signed release tag"
+#MISE depends=["test", "lint"]
+
+# Usage: mise run release [patch|minor|major|X.Y.Z]   (default: patch)
+#
+# Bumps pyproject.toml/uv.lock via `uv version`, prepends a changelog
+# section built from the commit subjects since the last tag, commits, and
+# creates a signed vX.Y.Z tag whose message is that section. Nothing is
+# pushed: publishing stays a deliberate follow-up (the printed next steps).
+set -euo pipefail
+
+bump="${1:-patch}"
+
+if [ -n "$(git status --porcelain)" ]; then
+  echo "release: working tree not clean — commit or stash first" >&2
+  exit 1
+fi
+branch="$(git rev-parse --abbrev-ref HEAD)"
+if [ "$branch" != "main" ]; then
+  echo "release: must run on main (publish workflow rejects tags off main), on: $branch" >&2
+  exit 1
+fi
+
+last_tag="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+notes="$(git log --no-merges --format='- %s' ${last_tag:+"$last_tag..HEAD"})"
+if [ -z "$notes" ]; then
+  echo "release: no commits since ${last_tag:-the beginning} — nothing to release" >&2
+  exit 1
+fi
+
+# `uv version` keeps pyproject.toml and uv.lock in step; CI's --locked
+# install fails if the lock's own-version entry goes stale.
+if [[ "$bump" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  uv version "$bump"
+else
+  uv version --bump "$bump"
+fi
+version="$(uv version --short)"
+tag="v$version"
+if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+  echo "release: tag $tag already exists" >&2
+  exit 1
+fi
+
+section="## $tag - $(date +%F)
+
+$notes"
+
+CHANGELOG_SECTION="$section" python3 - <<'PY'
+import os
+import pathlib
+
+path = pathlib.Path("CHANGELOG.md")
+header = "# Changelog"
+body = path.read_text(encoding="utf-8") if path.exists() else ""
+rest = body.removeprefix(header).lstrip("\n")
+parts = [header, os.environ["CHANGELOG_SECTION"]]
+if rest:
+    parts.append(rest.rstrip("\n"))
+path.write_text("\n\n".join(parts) + "\n", encoding="utf-8")
+PY
+
+git add pyproject.toml uv.lock CHANGELOG.md
+git commit --quiet -m "Release $tag" -- pyproject.toml uv.lock CHANGELOG.md
+
+# Tag message = the changelog section; whitespace cleanup keeps the
+# leading "## " markdown heading (default cleanup strips '#' lines).
+msgfile="$(mktemp)"
+trap 'rm -f "$msgfile"' EXIT
+printf '%s\n' "$section" >"$msgfile"
+git tag --sign --cleanup=whitespace --file "$msgfile" "$tag"
+
+echo
+echo "Released $tag (commit $(git rev-parse --short HEAD), signed tag created)."
+echo "To polish the notes first: edit CHANGELOG.md, git commit --amend --no-edit,"
+echo "  then re-sign the tag onto the amended commit: git tag -sf --cleanup=whitespace $tag"
+echo
+echo "Next steps:"
+echo "  git push origin main $tag"
+echo "  gh release create $tag --verify-tag --title $tag --notes-from-tag"

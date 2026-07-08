@@ -41,6 +41,10 @@ sharing.
 
 Keep PRs focused on one change. Describe the user-visible behavior in the description; link the issue if one exists. CI (lint + tests on Linux/macOS/Windows) must pass.
 
+## Releasing (maintainers)
+
+`mise run release [patch|minor|major|X.Y.Z]` (default `patch`) runs the full test and lint suites, bumps the version in `pyproject.toml`/`uv.lock`, prepends a section to `CHANGELOG.md` built from the commit subjects since the last tag, commits, and creates a signed `vX.Y.Z` tag carrying that section. It requires a clean worktree on `main` and pushes nothing; it prints the `git push` and `gh release create` follow-up commands. Publishing the GitHub release triggers the PyPI publish workflow, which re-validates that the tag matches the project version and that the commit is on `main`.
+
 ## Reporting bugs
 
 Use the bug report issue template. Hook crashes land in `~/.ostinote/hook-errors.log`, pipeline activity in `logs/memory-<date>.log`, and detached save subprocess output in `logs/background.log` inside the data dir (default `~/.ostinote/projects/<slug>/`) — including the relevant lines makes most bugs trivially diagnosable. Review and redact log lines before posting: they can contain summaries of your sessions and local paths.
