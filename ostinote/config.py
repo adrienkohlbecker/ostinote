@@ -52,6 +52,10 @@ DEFAULTS: dict = {
         # "" / "auto" to prefer claude and fall back to codex when only
         # codex is installed. Ignored when "command" is set.
         "engine": "",
+        # Model passed to the built-in engine command (e.g. a cheap codex
+        # tier like "gpt-5.4-mini"). Empty = the engine's own default.
+        # Ignored when "command" is set.
+        "model": "",
         # Override the summarizer invocation entirely (list of argv strings).
         # The prompt is always piped on stdin. Empty = built-in engine above.
         "command": [],
@@ -78,6 +82,8 @@ LEGACY_KEYS = {
 #   - ``summarizer.engine`` only picks between the built-in sandboxed
 #     commands, but that choice decides which model vendor receives extracted
 #     transcript content — not a cloned repo's call to make.
+#   - ``summarizer.model`` could silently redirect every save to a premium
+#     model, amplifying cost on someone else's account.
 #   - ``data_dir`` decides where memory is written and what the Codex installer
 #     grants sandbox write access to. It stays settable per-project (the in-repo
 #     ``.ostinote`` workflow needs it) but is flagged so ``Env`` can reject a
@@ -86,6 +92,7 @@ LEGACY_KEYS = {
 _PROJECT_DENIED = {
     ("summarizer", "command"): "it can execute commands",
     ("summarizer", "engine"): "it chooses where transcript content is sent",
+    ("summarizer", "model"): "it can raise the per-save model cost",
 }
 _PROJECT_GUARDED = (("data_dir",),)
 _PROJECT_MINIMUMS = {

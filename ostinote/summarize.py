@@ -5,7 +5,8 @@ prompt piped on stdin: the Claude CLI with Haiku (no tools, one turn, no
 session persistence) and the Codex CLI (read-only sandbox, ephemeral, low
 reasoning effort). The ``summarizer.engine`` config key picks one explicitly;
 the default auto-detects, preferring claude and falling back to codex for
-codex-only setups. The full argv can also be overridden via the
+codex-only setups. ``summarizer.model`` overrides the built-in command's
+model. The full argv can also be overridden via the
 ``summarizer.command`` config key, as long as the command prints the response
 text (claude-style JSON and codex ``--json`` event lines are also understood).
 """
@@ -76,23 +77,49 @@ class ModelResult:
 def resolve_command(cfg: dict) -> list[str]:
     """Return the summarizer argv this config resolves to.
 
-    An explicit ``summarizer.command`` always wins. Otherwise
+    An explicit ``summarizer.command`` always wins (``summarizer.model`` is
+    ignored with it — put the model in the argv). Otherwise
     ``summarizer.engine`` picks a built-in command; the auto default prefers
     claude and falls back to codex, so codex-only machines work without any
     config. When neither CLI is installed the claude command is returned so
     the eventual "not found" error names the primary engine.
+    ``summarizer.model`` then overrides the built-in command's model — the pin
+    lives in user config rather than here, because codex model slugs are
+    versioned and rotate out (there is no stable family alias like claude's
+    ``haiku``).
     """
     command = cfg["summarizer"]["command"]
     if command:
         return list(command)
     engine = cfg["summarizer"].get("engine", "")
     if engine == "claude":
-        return list(DEFAULT_COMMAND)
-    if engine == "codex":
-        return list(DEFAULT_COMMAND_CODEX)
-    if not shutil.which("claude") and shutil.which("codex"):
-        return list(DEFAULT_COMMAND_CODEX)
-    return list(DEFAULT_COMMAND)
+        command = list(DEFAULT_COMMAND)
+    elif engine == "codex":
+        command = list(DEFAULT_COMMAND_CODEX)
+    elif not shutil.which("claude") and shutil.which("codex"):
+        command = list(DEFAULT_COMMAND_CODEX)
+    else:
+        command = list(DEFAULT_COMMAND)
+    model = cfg["summarizer"].get("model", "")
+    if model:
+        command = _override_model(command, model)
+    return command
+
+
+def _override_model(command: list[str], model: str) -> list[str]:
+    """Return ``command`` with its model replaced (or added) as ``model``."""
+    command = list(command)
+    for flag in ("--model", "-m"):
+        if flag in command:
+            value_at = command.index(flag) + 1
+            if value_at < len(command):
+                command[value_at] = model
+                return command
+    # No model flag in the command: insert one before a trailing stdin "-"
+    # positional so the option/positional split stays unambiguous.
+    insert_at = len(command) - 1 if command and command[-1] == "-" else len(command)
+    command[insert_at:insert_at] = ["--model", model]
+    return command
 
 
 def call_model(prompt: str, cfg: dict) -> ModelResult:

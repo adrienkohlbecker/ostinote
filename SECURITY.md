@@ -58,7 +58,7 @@ The most sensitive surfaces, where reports are especially welcome:
   session of both agents, so anything that lets a poisoned session or a write
   to the memory directory persist instructions across sessions matters;
 - per-project `.ostinote/config.json`, which arrives with a cloned repo and is
-  therefore treated as untrusted (e.g. it may not set `summarizer.command` or
-  `summarizer.engine`);
+  therefore treated as untrusted (e.g. it may not set `summarizer.command`,
+  `summarizer.engine`, or `summarizer.model`);
 - path traversal, symlink following, hook clobbering, secret leakage, or unsafe
   log permissions across any of the files above.

@@ -51,9 +51,27 @@ def test_summarizer_never_persists_sessions(monkeypatch):
 
 
 def test_resolve_command_explicit_command_wins():
-    """Keep an explicit summarizer.command authoritative over engine selection."""
-    cfg = {"summarizer": {"command": ["my-engine"], "engine": "codex", "timeout": 5}}
+    """Keep an explicit summarizer.command authoritative over engine and model selection."""
+    cfg = {"summarizer": {"command": ["my-engine"], "engine": "codex", "model": "gpt-5.4-mini", "timeout": 5}}
     assert summarize.resolve_command(cfg) == ["my-engine"]
+
+
+def test_resolve_command_model_overrides_builtin_engine_model():
+    """Swap the built-in command's model for a user-configured one.
+
+    Expected: the claude command's `--model haiku` value is replaced in place,
+    and the codex command (which pins no model) gains a `--model` pair inserted
+    before the trailing stdin `-` so the positional stays last.
+    """
+    cfg = {"summarizer": {"command": [], "engine": "claude", "model": "opus", "timeout": 5}}
+    command = summarize.resolve_command(cfg)
+    assert command[command.index("--model") + 1] == "opus"
+    assert "haiku" not in command
+
+    cfg = {"summarizer": {"command": [], "engine": "codex", "model": "gpt-5.4-mini", "timeout": 5}}
+    command = summarize.resolve_command(cfg)
+    assert command[command.index("--model") + 1] == "gpt-5.4-mini"
+    assert command[-1] == "-"
 
 
 @pytest.mark.parametrize(

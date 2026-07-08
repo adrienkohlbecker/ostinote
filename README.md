@@ -133,12 +133,13 @@ Optional. Create `~/.ostinote/config.json` (trusted user config, applies everywh
 | `time_format` | `24h` | `24h` or `12h` timestamps |
 | `share_worktrees` | `true` | Sessions in git worktrees share the main checkout's memory |
 | `summarizer.engine` | auto | Trusted user-config-only choice of built-in summarizer: `claude`, `codex`, or auto (prefer claude, fall back to codex on codex-only machines) |
-| `summarizer.command` | per engine | Trusted user-config-only argv array for a summarizer that reads a prompt on stdin and prints a response; overrides `engine` |
+| `summarizer.model` | per engine | Trusted user-config-only model for the built-in engine command (e.g. a cheap codex tier — codex model slugs rotate, so keep the pin here where it is easy to update) |
+| `summarizer.command` | per engine | Trusted user-config-only argv array for a summarizer that reads a prompt on stdin and prints a response; overrides `engine` and `model` |
 | `summarizer.timeout` | `120` | Summarizer timeout, seconds |
 
 Less common tuning keys include `cooldowns.save_seconds`, `cooldowns.compress_seconds`, `thresholds.min_human_messages`, `thresholds.delta_lines_trigger`, `features.hourly_compression`, `features.recovery`, `features.consolidation`, and `debug`.
 
-Because a per-project config file arrives with a cloned repo, it is treated as untrusted: `summarizer.command` and `summarizer.engine` are ignored there, and a project-set `data_dir` is contained before use.
+Because a per-project config file arrives with a cloned repo, it is treated as untrusted: `summarizer.command`, `summarizer.engine`, and `summarizer.model` are ignored there, and a project-set `data_dir` is contained before use.
 
 `ostinote install` also takes `--project` to register hooks for a single project (in `<project>/.claude/settings.json` / `<project>/.codex/hooks.json`) instead of globally. Treat project hook files like executable agent config, review them before committing, and uninstall with the same `--project` scope.
 

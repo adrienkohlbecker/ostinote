@@ -113,6 +113,22 @@ def test_project_config_cannot_set_summarizer_engine(tmp_path, monkeypatch):
     assert any(issue.key == "summarizer.engine" and issue.level == "warn" for issue in report.issues)
 
 
+def test_project_config_cannot_set_summarizer_model(tmp_path, monkeypatch):
+    """Ignore an untrusted project config that tries to pick the model.
+
+    Expected: a cloned repo's `.ostinote/config.json` cannot point every save
+    at a premium model on someone else's account, while the trusted user layer
+    may pin whatever model it wants.
+    """
+    monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", str(tmp_path / "user.json"))
+    (tmp_path / "user.json").write_text(json.dumps({"summarizer": {"model": "gpt-5.4-mini"}}))
+    proj = project_with_config(tmp_path, {"summarizer": {"model": "premium-model"}})
+
+    report = config_mod.load_report(str(proj))
+    assert report.config["summarizer"]["model"] == "gpt-5.4-mini"
+    assert any(issue.key == "summarizer.model" and issue.level == "warn" for issue in report.issues)
+
+
 def test_config_rejects_unknown_summarizer_engine(tmp_path, monkeypatch):
     """Fall back to auto-detection when engine names an unknown value.
 
