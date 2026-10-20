@@ -212,6 +212,25 @@ def test_call_model_strips_claudecode_from_child_env(monkeypatch):
     assert child_env["OSTINOTE_TEST_SENTINEL"] == "kept"
 
 
+def test_builtin_claude_summarizer_does_not_think(monkeypatch):
+    """Keep the user's Claude Code thinking/effort settings off the summarizer.
+
+    Expected: `claude -p` inherits ~/.claude/settings.json and CLAUDE_EFFORT,
+    so with `alwaysThinkingEnabled`/high effort there, Haiku spent thousands
+    of thinking tokens per compression and hit the 120s timeout. The built-in
+    command pins thinking off at low effort through flag settings (which
+    outrank user settings), and CLAUDE_EFFORT never reaches the child.
+    """
+    flag_settings = json.loads(summarize.DEFAULT_COMMAND[summarize.DEFAULT_COMMAND.index("--settings") + 1])
+    assert flag_settings == {"alwaysThinkingEnabled": False, "effortLevel": "low"}
+
+    monkeypatch.setenv("CLAUDE_EFFORT", "high")
+    captured = {}
+    monkeypatch.setattr(summarize.subprocess, "run", _fake_run(captured))
+    summarize.call_model("hi", {"summarizer": {"command": ["my-engine"], "timeout": 5}})
+    assert "CLAUDE_EFFORT" not in captured["kwargs"]["env"]
+
+
 def test_call_model_empty_command_falls_back_to_default(monkeypatch):
     """Use the built-in claude/haiku command when none is configured.
 

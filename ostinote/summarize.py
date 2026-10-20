@@ -37,6 +37,11 @@ DEFAULT_COMMAND = [
     "--mcp-config",
     '{"mcpServers":{}}',
     "--strict-mcp-config",
+    # claude -p inherits ~/.claude/settings.json; a user's always-on thinking
+    # at high effort made Haiku spend minutes per compression and time out.
+    # Flag settings outrank user settings.
+    "--settings",
+    '{"alwaysThinkingEnabled":false,"effortLevel":"low"}',
 ]
 
 DEFAULT_COMMAND_CODEX = [
@@ -146,8 +151,10 @@ def call_model(prompt: str, cfg: dict) -> ModelResult:
     if executable.startswith("codex") and "--ephemeral" not in command:
         command.append("--ephemeral")
 
-    # CLAUDECODE blocks nested claude sessions when run from a Claude hook.
-    env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+    # CLAUDECODE blocks nested claude sessions when run from a Claude hook;
+    # CLAUDE_EFFORT, inherited from the parent session, would override the
+    # summarizer's low effort.
+    env = {k: v for k, v in os.environ.items() if k not in ("CLAUDECODE", "CLAUDE_EFFORT")}
 
     try:
         result = subprocess.run(
