@@ -15,12 +15,19 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass
 
 from .agents.base import Agent
+
+# Overload and rate-limit failures usually clear within seconds, so one
+# delayed retry saves the summary; other failures would just fail again.
+_TRANSIENT_ERROR = re.compile(r"overload|rate.?limit|\b(429|500|502|503|529)\b", re.IGNORECASE)
+_RETRY_DELAY_SECONDS = 20
 
 DEFAULT_COMMAND = [
     "claude",
@@ -159,26 +166,32 @@ def call_model(prompt: str, cfg: dict) -> ModelResult:
     # temp cwd; this marker makes them return at once (cli._hook_main).
     env["OSTINOTE_SUMMARIZER"] = "1"
 
-    try:
-        result = subprocess.run(
-            command,
-            input=prompt,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env=env,
-            cwd=tempfile.gettempdir(),
-        )
-    except subprocess.TimeoutExpired:
-        raise RuntimeError("summarizer timed out after %ss" % timeout) from None
-    except OSError as e:
-        raise RuntimeError("summarizer failed to start: %s" % e) from e
+    for attempt in range(2):
+        try:
+            result = subprocess.run(
+                command,
+                input=prompt,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                env=env,
+                cwd=tempfile.gettempdir(),
+            )
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("summarizer timed out after %ss" % timeout) from None
+        except OSError as e:
+            raise RuntimeError("summarizer failed to start: %s" % e) from e
 
-    if result.returncode != 0:
-        stderr = Agent._redact_sensitive(result.stderr.strip())[:300]
-        raise RuntimeError("summarizer exited %d: %s" % (result.returncode, stderr))
-
-    return parse_response(result.stdout)
+        if result.returncode == 0:
+            return parse_response(result.stdout)
+        # `claude -p --output-format json` reports API errors on stdout and
+        # leaves stderr empty.
+        detail = Agent._redact_sensitive(result.stderr.strip() or result.stdout.strip())[:300]
+        if attempt == 0 and _TRANSIENT_ERROR.search(detail):
+            time.sleep(_RETRY_DELAY_SECONDS)
+            continue
+        raise RuntimeError("summarizer exited %d: %s" % (result.returncode, detail))
+    raise AssertionError("unreachable")
 
 
 def parse_response(raw: str) -> ModelResult:

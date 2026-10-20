@@ -164,6 +164,54 @@ def test_call_model_redacts_nonzero_stderr(monkeypatch):
     assert text.count("[REDACTED]") == 2
 
 
+def _scripted_run(results, calls):
+    """Build a subprocess.run stand-in that returns (returncode, stdout) pairs in order."""
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        returncode, stdout = results[len(calls) - 1]
+        return types.SimpleNamespace(returncode=returncode, stdout=stdout, stderr="")
+
+    return fake_run
+
+
+def test_call_model_retries_once_on_transient_api_error(monkeypatch):
+    """Retry one overloaded summarizer call after a delay.
+
+    Expected: claude reports an overloaded API on stdout with empty stderr;
+    call_model sleeps, runs the command a second time, and returns that
+    attempt's parsed result instead of failing the save.
+    """
+    calls, sleeps = [], []
+    overloaded = json.dumps({"is_error": True, "result": "API Error: 529 Overloaded"})
+    monkeypatch.setattr(summarize.subprocess, "run", _scripted_run([(1, overloaded), (0, _OK_JSON)], calls))
+    monkeypatch.setattr(summarize.time, "sleep", sleeps.append)
+    cfg = {"summarizer": {"command": ["my-engine"], "timeout": 5}}
+
+    summarize.call_model("hi", cfg)
+
+    assert len(calls) == 2
+    assert sleeps == [summarize._RETRY_DELAY_SECONDS]
+
+
+def test_call_model_reports_stdout_error_without_retrying(monkeypatch):
+    """Surface a non-transient stdout error once, without a retry.
+
+    Expected: with empty stderr the RuntimeError carries the JSON error from
+    stdout, so pipeline logs say why the summarizer failed, and a failure that
+    would recur is not re-run.
+    """
+    calls = []
+    error = json.dumps({"is_error": True, "result": "Invalid model name"})
+    monkeypatch.setattr(summarize.subprocess, "run", _scripted_run([(1, error)], calls))
+    monkeypatch.setattr(summarize.time, "sleep", lambda _s: pytest.fail("must not retry"))
+    cfg = {"summarizer": {"command": ["my-engine"], "timeout": 5}}
+
+    with pytest.raises(RuntimeError, match="Invalid model name"):
+        summarize.call_model("hi", cfg)
+    assert len(calls) == 1
+
+
 def test_call_model_keeps_prompt_on_stdin_and_uses_temp_cwd(monkeypatch):
     """Keep transcript text out of argv/env while running from a neutral cwd."""
     prompt = "session transcript with private content"
