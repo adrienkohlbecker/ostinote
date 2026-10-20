@@ -408,17 +408,18 @@ def post_tool(agent_name: str) -> None:
     if session is None:
         return
     session_id, transcript_path, state = session
-    current_lines = _count_lines(transcript_path)
 
     # Register the session so recovery can find it even if no save ever ran.
     env.ensure_dirs()
     _remember_session(state, transcript_path, env.cwd)
 
-    delta = current_lines - state.line
-    if delta <= env.cfg["thresholds"]["delta_lines_trigger"]:
-        return
-    # Cheap pre-check; run_save re-checks both under the lock.
+    # Cooldown first: counting lines reads the whole transcript (tens of MB in
+    # long sessions) and this hook fires on every tool call. run_save
+    # re-checks both conditions under the lock.
     if time.time() - state.last_attempt_ts < env.cfg["cooldowns"]["save_seconds"]:
+        return
+    delta = _count_lines(transcript_path) - state.line
+    if delta <= env.cfg["thresholds"]["delta_lines_trigger"]:
         return
 
     env.log(

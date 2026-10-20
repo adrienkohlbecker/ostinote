@@ -325,6 +325,29 @@ def test_post_tool_skips_under_cooldown(tmp_path, monkeypatch, make_project_env,
     assert spawned == []
 
 
+def test_post_tool_under_cooldown_skips_reading_transcript(tmp_path, monkeypatch, make_project_env, spawned):
+    """Leave the transcript unread while the save cooldown is running.
+
+    Expected: `post_tool` fires on every tool call and long transcripts reach
+    tens of MB, so under cooldown it returns before counting lines, while
+    still registering the session for recovery.
+    """
+    env = make_project_env({"cooldowns": {"save_seconds": 1000}})
+    transcript = _codex_hook_transcript(env, "s1.jsonl")
+    env.ensure_dirs()
+    state = SessionState.load(env.sessions_dir, "codex", "s1")
+    state.transcript_path = transcript
+    state.last_attempt_ts = time.time()
+    state.save()
+    hook_stdin(monkeypatch, {"cwd": env.cwd, "transcript_path": transcript, "session_id": "s1"})
+    monkeypatch.setattr(hooks_mod, "_count_lines", lambda _path: pytest.fail("transcript read under cooldown"))
+
+    hooks_mod.post_tool("codex")
+
+    assert spawned == []
+    assert SessionState.load(env.sessions_dir, "codex", "s1").transcript_path == transcript
+
+
 def test_hooks_canonicalize_transcript_path(tmp_path, monkeypatch, make_project_env, spawned):
     """Resolve dot-dot segments before paths reach state or subprocesses.
 
