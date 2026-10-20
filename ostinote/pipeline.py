@@ -364,7 +364,8 @@ def run_archive_repair(env: Env, dry: bool = False) -> int:
 
     Recovers weeks an earlier consolidation dropped: a ``today-*.done.md`` day
     is missing when recent.md has no entry for it and archive.md no week
-    containing it. Missing days are appended verbatim (flattened) under their
+    containing it (for a week made of ``- YYYY-MM-DD:`` lines, as this
+    command writes them, only the listed days count). Missing days are appended verbatim (flattened) under their
     Monday week, without a model call; the previous archive is kept as .bak.
     ``dry`` only prints what would be added.
     """
@@ -381,8 +382,8 @@ def run_archive_repair(env: Env, dry: bool = False) -> int:
                 days[day] = [_read_or_empty(os.path.join(env.data_dir, name))]
         recent = _read_or_empty(env.recent_file)
         archive = _read_or_empty(env.archive_file)
-        covered_days = {day for day, _ in _dated_sections(recent)}
-        covered_weeks = _archive_weeks(archive)
+        covered_weeks, listed_days = _archive_coverage(archive)
+        covered_days = {day for day, _ in _dated_sections(recent)} | listed_days
         missing = {
             day: texts for day, texts in days.items() if day not in covered_days and _monday(day) not in covered_weeks
         }
@@ -457,6 +458,27 @@ def _dated_sections(text: str) -> list[tuple[date, str]]:
 def _archive_weeks(archive: str) -> set[date]:
     # Normalized to Monday so a week header dated mid-week still counts.
     return {_monday(day) for day, _ in _dated_sections(archive)}
+
+
+_DAY_LINE_RE = re.compile(r"^- (\d{4}-\d{2}-\d{2}): ", re.M)
+
+
+def _archive_coverage(archive: str) -> tuple[set[date], set[date]]:
+    """Return (summarized weeks, individually listed days) of an archive.
+
+    A week whose body lists ``- YYYY-MM-DD:`` lines (verbatim days folded in
+    by a repair or the consolidation guard) covers only those days; any other
+    week is a summary and covers all seven.
+    """
+    weeks: set[date] = set()
+    days: set[date] = set()
+    for day, body in _dated_sections(archive):
+        listed = {d for text in _DAY_LINE_RE.findall(body) if (d := _parse_day(text))}
+        if listed:
+            days |= listed
+        else:
+            weeks.add(_monday(day))
+    return weeks, days
 
 
 def _archive_gaps(days: dict[date, list[str]], old_archive: str, new_recent: str, new_archive: str) -> list[date]:

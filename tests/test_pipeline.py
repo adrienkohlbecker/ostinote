@@ -467,6 +467,33 @@ def test_repair_archive_restores_weeks_from_done_files(tmp_path, make_project_en
     assert "nothing to repair" in capsys.readouterr().out
 
 
+def test_repair_archive_fills_days_into_a_week_it_rebuilt(tmp_path, make_project_env):
+    """Add newly available days to a week an earlier repair built partially.
+
+    Expected: a week holding only repair-written `- YYYY-MM-DD:` lines covers
+    just those days, so a `.done.md` rebuilt later for another day of that
+    week is still folded in; a model-written week counts as covering all of
+    its days.
+    """
+    env = make_project_env()
+    env.ensure_dirs()
+    data = tmp_path / "data"
+    _write_memory(data, "today-2026-09-14.done.md", "rebuilt\n")
+    _write_memory(data, "today-2026-10-06.done.md", "summarized\n")
+    _write_memory(
+        data,
+        "archive.md",
+        "# Archive\n\n## Week of 2026-09-14\n- 2026-09-20: restored\n\n## Week of 2026-10-05\nsummary\n",
+    )
+
+    assert pipeline_mod.run_archive_repair(env) == 0
+
+    assert (data / "archive.md").read_text(encoding="utf-8") == (
+        "# Archive\n\n## Week of 2026-09-14\n- 2026-09-20: restored\n- 2026-09-14: rebuilt\n\n"
+        "## Week of 2026-10-05\nsummary\n"
+    )
+
+
 def test_run_save_skips_when_lock_held(tmp_path, monkeypatch, make_project_env):
     """Return cleanly when another process holds the save lock.
 
