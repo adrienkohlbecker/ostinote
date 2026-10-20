@@ -153,7 +153,7 @@ def _save_locked(env: Env, agent, session_id: str, transcript_path: str, force: 
         result.tokens.cost_usd,
     )
 
-    text = result.text.strip()
+    text = _strip_fences(result.text)
     if not text:
         env.log("model", "ERROR: empty response")
         return 1
@@ -209,7 +209,7 @@ def _maybe_compress(env: Env) -> None:
     except RuntimeError as e:
         env.log("compress", "ERROR: %s" % e)
         return
-    text = result.text.strip()
+    text = _strip_fences(result.text)
     if not text:
         env.log("compress", "ERROR: produced empty result")
         return
@@ -514,7 +514,7 @@ def drop_oldest_section(text: str) -> str | None:
 def _flatten(text: str) -> str:
     """One line of a day's text: header lines dropped, the rest joined by spaces."""
     lines = [ln.strip() for ln in text.splitlines()]
-    return " ".join(ln for ln in lines if ln and not ln.startswith("#"))
+    return " ".join(ln for ln in lines if ln and not ln.startswith("#") and not _FENCE_RE.match(ln))
 
 
 def _fold_days(archive: str, days: dict[date, list[str]]) -> str:
@@ -606,9 +606,17 @@ def _append_core(path: str, new_core: str) -> list[str]:
     return lines
 
 
+_FENCE_RE = re.compile(r"^```[\w+-]*$")
+
+
 def _strip_fences(text: str) -> str:
-    """Drop the markdown code-fence lines the model sometimes copies from the prompt's output-format example."""
-    lines = [ln for ln in text.strip().splitlines() if ln.strip() != "```"]
+    """Drop markdown code-fence lines (bare or language-tagged) the model wraps output in.
+
+    Memory files are plain text that later model stages re-read; a fence
+    adds nothing there, and a stray one swallows the rest of the file when
+    rendered.
+    """
+    lines = [ln for ln in text.strip().splitlines() if not _FENCE_RE.match(ln.strip())]
     return "\n".join(lines).strip()
 
 

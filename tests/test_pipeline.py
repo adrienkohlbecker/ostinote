@@ -181,25 +181,34 @@ def test_run_save_hourly_compression_moves_now_into_today(tmp_path, monkeypatch,
 
     Expected: the first fake model response is appended to `now.md`, the second
     compresses that buffer into today's daily file, and `now.md` is emptied.
+    Code fences the model wraps either reply in are dropped, not stored.
     """
     env = make_project_env({"features": {"hourly_compression": True}})
     transcript = tmp_path / "session.jsonl"
     transcript.write_text(codex_user("Compress this") + "\n", encoding="utf-8")
     responses = iter(
         [
-            model_result("## 11:00 | main\nCaptured thing"),
-            model_result("## 2026-06-11\nCompressed thing"),
+            # Both stages sometimes wrap their reply in a code fence.
+            model_result("```\n## 11:00 | main\nCaptured thing\n```"),
+            model_result("```markdown\n## 2026-06-11\nCompressed thing\n```"),
         ]
     )
     # The save path calls the model once for the immediate summary and once for
     # compression, so the iterator order mirrors that control flow.
-    monkeypatch.setattr(pipeline_mod.summarize, "call_model", lambda _prompt, _cfg: next(responses))
+    prompts_seen = []
+    monkeypatch.setattr(
+        pipeline_mod.summarize, "call_model", lambda prompt, _cfg: prompts_seen.append(prompt) or next(responses)
+    )
     today = env.today()  # pinned before the act so a midnight rollover can't flake the assert
 
     assert pipeline_mod.run_save(env, "codex", "s1", str(transcript)) == 0
 
+    assert "\n## 11:00 | main\nCaptured thing\n" in prompts_seen[1]
+    assert "```" not in prompts_seen[1]
     assert (tmp_path / "data" / "now.md").read_text(encoding="utf-8") == ""
-    assert "Compressed thing" in (tmp_path / "data" / ("today-%s.md" % today)).read_text(encoding="utf-8")
+    assert (tmp_path / "data" / ("today-%s.md" % today)).read_text(encoding="utf-8") == (
+        "## 2026-06-11\nCompressed thing\n"
+    )
 
 
 @pytest.mark.parametrize("failure", ["error", "empty"], ids=["model-error", "empty-result"])
@@ -443,7 +452,7 @@ def test_repair_archive_restores_weeks_from_done_files(tmp_path, make_project_en
     env.ensure_dirs()
     data = tmp_path / "data"
     _write_memory(data, "today-2026-09-21.done.md", "## 08:48 | master\ndimmers\n")
-    _write_memory(data, "today-2026-09-23.done.md", "SEN55\n")
+    _write_memory(data, "today-2026-09-23.done.md", "```bash\nSEN55\n```\n")
     _write_memory(data, "today-2026-10-06.done.md", "already archived\n")
     _write_memory(data, "today-2026-10-19.done.md", "still recent\n")
     _write_memory(data, "recent.md", "# Recent\n\n## 2026-10-19\nstill recent\n")
