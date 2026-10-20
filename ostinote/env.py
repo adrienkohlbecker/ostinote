@@ -16,6 +16,8 @@ config, and owns the data-directory layout:
 from __future__ import annotations
 
 import contextlib
+import hashlib
+import json
 import os
 import re
 import stat
@@ -83,6 +85,56 @@ def worktree_root_for(cwd: str) -> str:
     return cwd
 
 
+def _worktree_root_record(worktree_root: str) -> str:
+    """Path of the remembered project root for one linked worktree.
+
+    Hashed rather than slugified: slugs are lossy (``/a-b`` and ``/a/b``
+    collide), and a collision here would file one project's saves under
+    another's memory. The record repeats the worktree path for verification.
+    """
+    digest = hashlib.sha256(worktree_root.encode("utf-8", "surrogateescape")).hexdigest()[:32]
+    return os.path.join(os.path.expanduser("~/.ostinote/worktree-roots"), digest + ".json")
+
+
+def _remember_worktree_root(worktree_root: str, root: str) -> None:
+    """Record a linked worktree's resolved project root, best effort.
+
+    Saves can outlive the worktree (recovery at the next session start, a
+    background save racing ``git worktree remove``); git cannot resolve a
+    deleted directory, so the resolution is kept while it still exists. Only
+    rewritten when it changes, with a per-pid tmp file and atomic rename.
+    """
+    path = _worktree_root_record(worktree_root)
+    record = {"worktree": worktree_root, "root": root}
+    if config_mod._read_json(path) == record:
+        return
+    # Losing this record only degrades a later save of a deleted worktree to
+    # the cwd fallback; it must never break the hook that triggered it.
+    with contextlib.suppress(OSError):
+        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+        tmp = "%s.%d.tmp" % (path, os.getpid())
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(record, f)
+        os.replace(tmp, path)
+
+
+def _remembered_root(cwd: str) -> str:
+    """Return the recorded project root for a deleted worktree path, or "".
+
+    Walks up from ``cwd`` so a session started in a worktree subdirectory
+    still finds its worktree's record.
+    """
+    path = cwd
+    while True:
+        record = config_mod._read_json(_worktree_root_record(path))
+        if record.get("worktree") == path and isinstance(record.get("root"), str) and record["root"]:
+            return record["root"]
+        parent = os.path.dirname(path)
+        if parent == path:
+            return ""
+        path = parent
+
+
 def _resolve_root_config(cwd: str) -> tuple[str, dict, set]:
     """Resolve (project_root, cfg, guarded) for a session cwd.
 
@@ -90,16 +142,26 @@ def _resolve_root_config(cwd: str) -> tuple[str, dict, set]:
     sessions share one memory — unless the resolved project opts out via
     ``share_worktrees: false``, in which case the worktree's own checkout is
     used instead. ``guarded`` is the set of untrusted project keys that need
-    validation (see ``config.load_trusted``).
+    validation (see ``config.load_trusted``). A cwd that no longer exists
+    (a removed worktree) resolves through the root recorded while it did.
     """
     cwd = os.path.abspath(cwd)
+    if not os.path.isdir(cwd):
+        remembered = _remembered_root(cwd)
+        if remembered:
+            cfg, guarded = config_mod.load_trusted(remembered)
+            return remembered, cfg, guarded
     worktree_root = worktree_root_for(cwd)
     main_root = _git_main_root(cwd)
     main_cfg, main_guarded = config_mod.load_trusted(main_root)
     worktree_cfg, worktree_guarded = config_mod.load_trusted(worktree_root)
     if not worktree_cfg["share_worktrees"] or not main_cfg["share_worktrees"]:
-        return worktree_root, worktree_cfg, worktree_guarded
-    return main_root, main_cfg, main_guarded
+        root, cfg, guarded = worktree_root, worktree_cfg, worktree_guarded
+    else:
+        root, cfg, guarded = main_root, main_cfg, main_guarded
+    if worktree_root != main_root:
+        _remember_worktree_root(worktree_root, root)
+    return root, cfg, guarded
 
 
 def _resolve_data_dir(cfg: dict, project_root: str) -> str:

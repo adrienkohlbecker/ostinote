@@ -92,3 +92,35 @@ def test_env_worktree_local_config_can_opt_out(tmp_path):
 
     assert env.project_root == str(worktree)
     assert env.data_dir != Env(str(main)).data_dir
+
+
+def test_env_resolves_removed_worktree_to_main_checkout(tmp_path):
+    """Keep a removed worktree's late saves in the shared project memory.
+
+    Expected: once an Env has resolved a linked worktree while it existed, an
+    Env built from that path (or a subdirectory) after `git worktree remove`
+    — a recovery save or a background save that outlives the worktree —
+    still resolves to the main checkout instead of a slug of the dead path.
+    """
+    main = project_with_config(tmp_path, {"share_worktrees": True}, name="main")
+    run_git(main, "init", "-q")
+    run_git(main, "add", ".")
+    run_git(main, "commit", "-q", "-m", "init")
+    worktree = tmp_path / "wt"
+    run_git(main, "worktree", "add", "--detach", "-q", str(worktree))
+    assert Env(str(worktree)).project_root == str(main)
+
+    run_git(main, "worktree", "remove", "--force", str(worktree))
+    assert not worktree.exists()
+
+    env = Env(str(worktree))
+    assert env.project_root == str(main)
+    assert env.data_dir == Env(str(main)).data_dir
+    assert Env(str(worktree / "src" / "pkg")).project_root == str(main)
+
+
+def test_env_never_seen_removed_path_falls_back_to_cwd(tmp_path):
+    """Fall back to the literal cwd for a missing path with no recorded root."""
+    gone = tmp_path / "never-existed"
+
+    assert Env(str(gone)).project_root == str(gone)

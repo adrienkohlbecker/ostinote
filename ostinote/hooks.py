@@ -108,7 +108,9 @@ def spawn(env: Env, args: list[str]) -> None:
                 stdin=subprocess.DEVNULL,
                 stdout=log,
                 stderr=log,
-                cwd=env.cwd,
+                # A removed worktree cannot be a working directory; the child
+                # gets the original cwd through --cwd regardless.
+                cwd=env.cwd if os.path.isdir(env.cwd) else env.project_root,
                 **detach,
             )
     except OSError as exc:

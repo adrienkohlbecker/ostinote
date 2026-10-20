@@ -75,7 +75,7 @@ The mental model is simple:
 3. **Compress:** periodic jobs merge `now.md` into `today-YYYY-MM-DD.md`, then older days into `recent.md` and `archive.md`.
 4. **Inject:** fresh sessions receive a `=== MEMORY ===` block assembled from the useful layers.
 
-Both agents use the same storage, locks, cooldowns, recovery logic, and consolidation pipeline. Parallel sessions are safe: each session tracks its own transcript position, shared writes are serialized by a lock, and git worktrees share the main checkout's memory by default (`share_worktrees`).
+Both agents use the same storage, locks, cooldowns, recovery logic, and consolidation pipeline. Parallel sessions are safe: each session tracks its own transcript position, shared writes are serialized by a lock, and git worktrees share the main checkout's memory by default (`share_worktrees`). Each worktree's resolved root is recorded under `~/.ostinote/worktree-roots/`, so a save that runs after the worktree is removed still lands in the shared memory.
 
 Optional curated memory files live alongside the automatic layers. `identity.md` is written by you and injected first. `core-memories.md` is append-only durable memory; the installed `/ostinote` skill in Claude Code and `$ostinote` skill in Codex append one dated line there when you want a fact to survive normal aging.
 

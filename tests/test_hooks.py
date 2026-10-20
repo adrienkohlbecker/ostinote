@@ -439,6 +439,26 @@ def test_spawn_creates_owner_only_background_log(tmp_path, monkeypatch, make_pro
     assert log.stat().st_mode & 0o777 == 0o600
 
 
+def test_spawn_from_removed_worktree_runs_in_project_root(tmp_path, monkeypatch, make_project_env):
+    """Launch background work even when the session cwd was deleted.
+
+    Expected: a session-end or recovery hook for a removed worktree still
+    spawns its save, from the project root, rather than failing because the
+    child's working directory no longer exists. The save itself gets the
+    original cwd via `--cwd`.
+    """
+    env = make_project_env()
+    env.cwd = str(tmp_path / "removed-worktree")
+    launched = []
+    monkeypatch.setattr(
+        hooks_mod.subprocess, "Popen", lambda *args, **kwargs: launched.append(kwargs) or types.SimpleNamespace(pid=1)
+    )
+
+    hooks_mod.spawn(env, ["save", "--cwd", env.cwd])
+
+    assert launched and launched[0]["cwd"] == env.project_root
+
+
 @pytest.mark.skipif(os.name != "posix", reason="POSIX symlink behavior")
 def test_spawn_refuses_symlinked_background_log(tmp_path, monkeypatch, make_project_env):
     """Do not follow a pre-existing background.log symlink.
