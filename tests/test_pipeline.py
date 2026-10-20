@@ -252,7 +252,7 @@ def test_run_consolidation_writes_sections_and_marks_staging_done(tmp_path, monk
         seen["prompt"] = prompt
         seen["timeout"] = cfg["summarizer"]["timeout"]
         return model_result(
-            "===RECENT===\n# Recent\n\nnew recent\n===ARCHIVE===\n# Archive\n\nnew archive\n"
+            "===RECENT===\n# Recent\n\nnew recent\n===ARCHIVE===\n# Archive\n\n## Week of 1999-12-27\nnew archive\n"
             "===CORE===\n- 2026-06-12: stable fact"
         )
 
@@ -265,7 +265,9 @@ def test_run_consolidation_writes_sections_and_marks_staging_done(tmp_path, monk
     assert "Archive cutoff: 2026-06-09" in seen["prompt"]
     assert seen["timeout"] >= 180
     assert (tmp_path / "data" / "recent.md").read_text(encoding="utf-8") == "# Recent\n\nnew recent\n"
-    assert (tmp_path / "data" / "archive.md").read_text(encoding="utf-8") == "# Archive\n\nnew archive\n"
+    assert (tmp_path / "data" / "archive.md").read_text(encoding="utf-8") == (
+        "# Archive\n\n## Week of 1999-12-27\nnew archive\n"
+    )
     assert "- 2026-06-12: stable fact" in (tmp_path / "data" / "core-memories.md").read_text(encoding="utf-8")
     assert not staging.exists()
     assert (tmp_path / "data" / "today-2000-01-01.done.md").exists()
@@ -344,15 +346,125 @@ def test_run_consolidation_missing_archive_section_keeps_archive(tmp_path, monke
     monkeypatch.setattr(
         pipeline_mod.summarize,
         "call_model",
-        lambda _prompt, _cfg: model_result("===RECENT===\n# Recent\n\nnew recent"),
+        lambda _prompt, _cfg: model_result("===RECENT===\n# Recent\n\n## 2000-01-01\nnew recent"),
     )
 
     assert pipeline_mod.run_consolidation(env) == 0
 
-    assert (tmp_path / "data" / "recent.md").read_text(encoding="utf-8") == "# Recent\n\nnew recent\n"
+    assert (tmp_path / "data" / "recent.md").read_text(encoding="utf-8") == "# Recent\n\n## 2000-01-01\nnew recent\n"
     assert (tmp_path / "data" / "archive.md").read_text(encoding="utf-8") == "# Archive\n\nold archive"
     assert not staging.exists()
     assert (tmp_path / "data" / "today-2000-01-01.done.md").exists()
+
+
+def _write_memory(data, name, text):
+    (data / name).write_text(text, encoding="utf-8")
+
+
+def test_run_consolidation_keeps_weeks_the_reply_dropped(tmp_path, monkeypatch, make_project_env):
+    """Refuse an archive rewrite that loses weeks; append them deterministically.
+
+    Expected: the model reply drops an existing archive week and never
+    mentions the staged day or an aged-out recent day. The old archive is
+    kept, the uncovered days are folded into their Monday weeks verbatim
+    (flattened, day headers stripped), weeks come out chronological, and a
+    WARNING names the dropped weeks — instead of a silent `done`.
+    """
+    env = make_project_env()
+    monkeypatch.setattr(env, "today", lambda: "2026-09-30")
+    env.ensure_dirs()
+    data = tmp_path / "data"
+    _write_memory(
+        data, "today-2026-09-22.md", "## 08:48 | master\ndimmers wired\n\n## 09:10 | master\nSEN55 calibrated\n"
+    )
+    _write_memory(data, "recent.md", "# Recent\n\n## 2026-09-16\nprune_ansible_backups landed\n")
+    _write_memory(
+        data,
+        "archive.md",
+        "# Archive\n\n## Week of 2026-09-07\n--assume-clean rebuild\n\n## Week of 2026-08-31\nearly work\n",
+    )
+    monkeypatch.setattr(
+        pipeline_mod.summarize,
+        "call_model",
+        lambda _prompt, _cfg: model_result(
+            "===RECENT===\n# Recent\n\n## 2026-09-29\nunrelated\n===ARCHIVE===\n# Archive\n\n"
+            "## Week of 2026-08-31\nearly work, reworded\n"
+        ),
+    )
+
+    assert pipeline_mod.run_consolidation(env) == 0
+
+    assert (data / "archive.md").read_text(encoding="utf-8") == (
+        "# Archive\n\n"
+        "## Week of 2026-08-31\nearly work\n\n"
+        "## Week of 2026-09-07\n--assume-clean rebuild\n\n"
+        "## Week of 2026-09-14\n- 2026-09-16: prune_ansible_backups landed\n\n"
+        "## Week of 2026-09-21\n- 2026-09-22: dimmers wired SEN55 calibrated\n"
+    )
+    assert (data / "recent.md").read_text(encoding="utf-8") == "# Recent\n\n## 2026-09-29\nunrelated\n"
+    assert (data / "today-2026-09-22.done.md").exists()
+    log = next((data / "logs").glob("memory-*.log")).read_text(encoding="utf-8")
+    assert "WARNING: reply dropped week(s) 2026-09-07, 2026-09-14, 2026-09-21" in log
+
+
+def test_run_consolidation_sorts_archive_weeks(tmp_path, monkeypatch, make_project_env):
+    """Write archive weeks in chronological order whatever order the model used."""
+    env = make_project_env()
+    monkeypatch.setattr(env, "today", lambda: "2026-09-30")
+    env.ensure_dirs()
+    data = tmp_path / "data"
+    _write_memory(data, "today-2026-09-22.md", "day\n")
+    _write_memory(data, "archive.md", "# Archive\n\n## Week of 2026-09-01\nb\n\n## Week of 2026-08-25\na\n")
+    monkeypatch.setattr(
+        pipeline_mod.summarize,
+        "call_model",
+        lambda _prompt, _cfg: model_result(
+            "===RECENT===\n# Recent\n\n## 2026-09-22\nday\n===ARCHIVE===\n# Archive\n\n"
+            "## Week of 2026-09-01\nb\n\n## Week of 2026-08-25\na\n"
+        ),
+    )
+
+    assert pipeline_mod.run_consolidation(env) == 0
+
+    assert (data / "archive.md").read_text(encoding="utf-8") == (
+        "# Archive\n\n## Week of 2026-08-25\na\n\n## Week of 2026-09-01\nb\n"
+    )
+
+
+def test_repair_archive_restores_weeks_from_done_files(tmp_path, make_project_env, capsys):
+    """Rebuild weeks a past consolidation lost, from the consumed daily files.
+
+    Expected: `.done.md` days whose date is neither in recent.md nor inside an
+    archive week are folded into archive.md (old copy kept as .bak); days
+    already covered are left alone, and a second run is a no-op. With
+    `dry`, nothing is written.
+    """
+    env = make_project_env()
+    env.ensure_dirs()
+    data = tmp_path / "data"
+    _write_memory(data, "today-2026-09-21.done.md", "## 08:48 | master\ndimmers\n")
+    _write_memory(data, "today-2026-09-23.done.md", "SEN55\n")
+    _write_memory(data, "today-2026-10-06.done.md", "already archived\n")
+    _write_memory(data, "today-2026-10-19.done.md", "still recent\n")
+    _write_memory(data, "recent.md", "# Recent\n\n## 2026-10-19\nstill recent\n")
+    original = "# Archive\n\n## Week of 2026-10-05\nsummary"  # no trailing newline
+    _write_memory(data, "archive.md", original)
+
+    assert pipeline_mod.run_archive_repair(env, dry=True) == 0
+    assert "2026-09-21" in capsys.readouterr().out
+    assert (data / "archive.md").read_text(encoding="utf-8") == original
+
+    assert pipeline_mod.run_archive_repair(env) == 0
+
+    assert (data / "archive.md").read_text(encoding="utf-8") == (
+        "# Archive\n\n"
+        "## Week of 2026-09-21\n- 2026-09-21: dimmers\n- 2026-09-23: SEN55\n\n"
+        "## Week of 2026-10-05\nsummary\n"
+    )
+    assert (data / "archive.md.bak").read_text(encoding="utf-8") == original
+    capsys.readouterr()
+    assert pipeline_mod.run_archive_repair(env) == 0
+    assert "nothing to repair" in capsys.readouterr().out
 
 
 def test_run_save_skips_when_lock_held(tmp_path, monkeypatch, make_project_env):

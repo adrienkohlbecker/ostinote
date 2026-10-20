@@ -6,8 +6,9 @@ Subcommands:
         Lifecycle hook entry points (read agent JSON on stdin, never fail).
     save [--agent A] [--session ID] [--transcript PATH] [--force|--final] [--dry]
         Extract + summarize one session into now.md.
-    consolidate
-        Merge past-day staging files into recent.md / archive.md.
+    consolidate [--repair [--dry]]
+        Merge past-day staging files into recent.md / archive.md; --repair
+        restores consumed days that neither file covers anymore.
     status [--costs]
         Show resolved paths, memory files, and tracked sessions.
     doctor [--live]
@@ -114,6 +115,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_cons = sub.add_parser("consolidate", help="compress past days into recent/archive", allow_abbrev=False)
     _add_cwd(p_cons)
+    p_cons.add_argument(
+        "--repair",
+        action="store_true",
+        help="no model call: fold .done.md days missing from recent/archive back into archive.md",
+    )
+    p_cons.add_argument("--dry", action="store_true", help="with --repair, only list the missing days")
     p_cons.set_defaults(func=_cmd_consolidate)
 
     p_status = sub.add_parser("status", help="show memory state", allow_abbrev=False)
@@ -221,6 +228,8 @@ def _cmd_save(args) -> int:
 
 
 def _cmd_consolidate(args) -> int:
+    if args.repair:
+        return pipeline.run_archive_repair(_env(args), dry=args.dry)
     return pipeline.run_consolidation(_env(args))
 
 

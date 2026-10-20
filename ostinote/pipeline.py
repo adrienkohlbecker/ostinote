@@ -306,17 +306,36 @@ def run_consolidation(env: Env) -> int:
         if not new_recent:
             env.log("consolidation", "ERROR: empty recent section, aborting")
             return 1
+        if not new_archive and archive.strip():
+            env.log("consolidation", "WARNING: reply had no archive section; archive.md left unchanged")
+
+        # The model rewrites the whole archive and has silently dropped weeks
+        # while logging success. Every day it was given must survive somewhere,
+        # and every archived week must outlive the rewrite; otherwise its
+        # archive is discarded and the uncovered days are folded in verbatim.
+        days = _staged_days(contents)
+        for day, text in _dated_sections(recent):
+            days.setdefault(day, []).append(text)
+        archive_out = new_archive or archive
+        gaps = _archive_gaps(days, archive, new_recent, archive_out)
+        if gaps:
+            env.log(
+                "consolidation",
+                "WARNING: reply dropped week(s) %s; keeping old archive and appending the missing days verbatim"
+                % ", ".join(week.isoformat() for week in gaps),
+            )
+            recent_days = {day for day, _ in _dated_sections(new_recent)}
+            archive_out = _fold_days(archive, {day: texts for day, texts in days.items() if day not in recent_days})
+        archive_out = _sort_weeks(archive_out)
 
         # Consolidation rewrites long-term memory wholesale from model output,
         # so keep a one-deep .bak of each file it replaces; a bad run can be
         # undone by hand (staging inputs survive as .done.md as well).
         _backup(env.recent_file)
         _write(env.recent_file, new_recent + "\n")
-        if new_archive:
+        if archive_out.strip() and archive_out != archive:
             _backup(env.archive_file)
-            _write(env.archive_file, new_archive + "\n")
-        elif archive.strip():
-            env.log("consolidation", "WARNING: reply had no archive section; archive.md left unchanged")
+            _write(env.archive_file, archive_out.rstrip("\n") + "\n")
         if new_core:
             promoted = _append_core(env.core_memories_file, new_core)
             if promoted:
@@ -338,6 +357,161 @@ def run_consolidation(env: Env) -> int:
         return 0
     finally:
         lock.release()
+
+
+def run_archive_repair(env: Env, dry: bool = False) -> int:
+    """Fold consumed daily files that no memory file covers back into archive.md.
+
+    Recovers weeks an earlier consolidation dropped: a ``today-*.done.md`` day
+    is missing when recent.md has no entry for it and archive.md no week
+    containing it. Missing days are appended verbatim (flattened) under their
+    Monday week, without a model call; the previous archive is kept as .bak.
+    ``dry`` only prints what would be added.
+    """
+    env.ensure_dirs()
+    lock = PidLock(os.path.join(env.state_dir, "consolidate.lock"))
+    if not lock.acquire():
+        print("consolidation running, try again later")
+        return 1
+    try:
+        days: dict[date, list[str]] = {}
+        for name in sorted(os.listdir(env.data_dir)):
+            day = _staging_day(name, ".done.md")
+            if day:
+                days[day] = [_read_or_empty(os.path.join(env.data_dir, name))]
+        recent = _read_or_empty(env.recent_file)
+        archive = _read_or_empty(env.archive_file)
+        covered_days = {day for day, _ in _dated_sections(recent)}
+        covered_weeks = _archive_weeks(archive)
+        missing = {
+            day: texts for day, texts in days.items() if day not in covered_days and _monday(day) not in covered_weeks
+        }
+        if not missing:
+            print("nothing to repair")
+            return 0
+        print("missing day(s): %s" % ", ".join(day.isoformat() for day in sorted(missing)))
+        if dry:
+            return 0
+        _backup(env.archive_file)
+        _write(env.archive_file, _sort_weeks(_fold_days(archive, missing)).rstrip("\n") + "\n")
+        env.log("repair", "archive.md: restored %d day(s) from .done.md files" % len(missing))
+        print("archive.md updated (previous copy: archive.md.bak)")
+        return 0
+    finally:
+        lock.release()
+
+
+# --- Archive coverage ----------------------------------------------------------
+
+_SECTION_DATE_RE = re.compile(r"## (?:Week of )?(\d{4}-\d{2}-\d{2})\b")
+
+
+def _parse_day(text: str) -> date | None:
+    try:
+        return date.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _monday(day: date) -> date:
+    return day - timedelta(days=day.weekday())
+
+
+def _staging_day(name: str, suffix: str = ".md") -> date | None:
+    """Date encoded in a ``today-YYYY-MM-DD<suffix>`` filename, if any."""
+    if not (name.startswith("today-") and name.endswith(suffix)):
+        return None
+    return _parse_day(name[len("today-") : -len(suffix)])
+
+
+def _staged_days(contents: dict[str, str]) -> dict[date, list[str]]:
+    days: dict[date, list[str]] = {}
+    for name, text in contents.items():
+        day = _staging_day(name)
+        if day:
+            days.setdefault(day, []).append(text)
+    return days
+
+
+def _split_sections(text: str) -> tuple[str, list[str]]:
+    """Split markdown into the text before the first ``## `` header and each ``## `` section."""
+    parts = re.split(r"(?m)^(?=## )", text)
+    return parts[0], parts[1:]
+
+
+def _section_day(section: str) -> date | None:
+    m = _SECTION_DATE_RE.match(section)
+    return _parse_day(m.group(1)) if m else None
+
+
+def _dated_sections(text: str) -> list[tuple[date, str]]:
+    """``(date, body)`` for each ``## YYYY-MM-DD`` / ``## Week of`` section."""
+    out = []
+    for section in _split_sections(text)[1]:
+        day = _section_day(section)
+        if day:
+            out.append((day, section.split("\n", 1)[1] if "\n" in section else ""))
+    return out
+
+
+def _archive_weeks(archive: str) -> set[date]:
+    # Normalized to Monday so a week header dated mid-week still counts.
+    return {_monday(day) for day, _ in _dated_sections(archive)}
+
+
+def _archive_gaps(days: dict[date, list[str]], old_archive: str, new_recent: str, new_archive: str) -> list[date]:
+    """Weeks lost by a consolidation reply, oldest first.
+
+    A day is kept when the new recent.md has its entry or the new archive.md
+    a week containing it; an old archive week is kept when the new archive
+    still has it.
+    """
+    recent_days = {day for day, _ in _dated_sections(new_recent)}
+    weeks = _archive_weeks(new_archive)
+    gaps = {_monday(day) for day in days if day not in recent_days and _monday(day) not in weeks}
+    gaps |= _archive_weeks(old_archive) - weeks
+    return sorted(gaps)
+
+
+def _flatten(text: str) -> str:
+    """One line of a day's text: header lines dropped, the rest joined by spaces."""
+    lines = [ln.strip() for ln in text.splitlines()]
+    return " ".join(ln for ln in lines if ln and not ln.startswith("#"))
+
+
+def _fold_days(archive: str, days: dict[date, list[str]]) -> str:
+    """Append each day as a ``- YYYY-MM-DD: text`` line under its Monday week."""
+    preamble, sections = _split_sections(archive)
+    # Every block must end in a newline, or the next "## " header would not
+    # start a line and the week would merge into the text before it.
+    preamble = (preamble.rstrip("\n") or "# Archive") + "\n\n"
+    sections = [section.rstrip("\n") + "\n\n" for section in sections]
+    by_week = {}
+    for i, section in enumerate(sections):
+        day = _section_day(section)
+        if day:
+            by_week.setdefault(_monday(day), i)
+    for day in sorted(days):
+        line = "- %s: %s" % (day.isoformat(), " ".join(_flatten(text) for text in days[day]).strip())
+        week = _monday(day)
+        if week in by_week:
+            i = by_week[week]
+            sections[i] = sections[i].rstrip("\n") + "\n" + line + "\n\n"
+        else:
+            by_week[week] = len(sections)
+            sections.append("## Week of %s\n%s\n\n" % (week.isoformat(), line))
+    return preamble + "".join(sections)
+
+
+def _sort_weeks(archive: str) -> str:
+    """Order archive sections chronologically; undated sections go last."""
+    preamble, sections = _split_sections(archive)
+    if not sections:
+        return archive
+    ordered = sorted(sections, key=lambda section: _section_day(section) or date.max)
+    blocks = [preamble.strip()] if preamble.strip() else []
+    blocks += [section.strip() for section in ordered]
+    return "\n\n".join(blocks) + "\n"
 
 
 def parse_consolidation_response(text: str):

@@ -91,6 +91,8 @@ ostinote doctor --live   # include one real summarizer call
 ostinote save --dry      # print extracted conversation; no model call, no writes
 ostinote save --force    # save right now, skipping cooldowns
 ostinote consolidate     # run daily consolidation right now
+ostinote consolidate --repair --dry  # list consumed days missing from recent/archive
+ostinote consolidate --repair        # fold them back into archive.md (no model call)
 ```
 
 Development tasks include `mise run test`, `mise run test -- -m "not functional"`, `mise run lint`, `mise run dry:claude`, and `mise run dry:codex`.

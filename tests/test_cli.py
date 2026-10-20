@@ -51,6 +51,14 @@ def test_cli_dispatches_save_and_consolidate(tmp_path, monkeypatch):
     assert cli_mod.main(["consolidate", "--cwd", str(tmp_path)]) == 3
     assert calls[-1] == ("consolidate", str(tmp_path))
 
+    monkeypatch.setattr(
+        cli_mod.pipeline,
+        "run_archive_repair",
+        lambda env, dry: calls.append(("repair", env.cwd, dry)) or 4,
+    )
+    assert cli_mod.main(["consolidate", "--repair", "--dry", "--cwd", str(tmp_path)]) == 4
+    assert calls[-1] == ("repair", str(tmp_path), True)
+
 
 def test_cli_version_prints_distribution_version(capsys):
     """Check that `--version` reports the installed distribution's version.
