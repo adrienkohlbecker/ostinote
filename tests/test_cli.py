@@ -89,6 +89,22 @@ def test_cli_save_force_and_final_are_mutually_exclusive(tmp_path):
     assert exc.value.code == 2
 
 
+def test_cli_hooks_are_inert_inside_the_summarizer(tmp_path, monkeypatch):
+    """Ignore hooks fired by ostinote's own summarizer session.
+
+    Expected: the summarizer runs `claude -p` / `codex exec`, which fire the
+    user's installed ostinote hooks in the summarizer's temp cwd. Under the
+    marker env var that call_model sets, a hook returns at once: no handler
+    runs, so no memory dir is created for the temp directory.
+    """
+    monkeypatch.setenv("OSTINOTE_SUMMARIZER", "1")
+    monkeypatch.setattr(
+        cli_mod.hooks_mod, "session_start", lambda _agent: pytest.fail("hook ran inside the summarizer")
+    )
+
+    assert cli_mod.main(["hook", "session-start", "--agent", "claude"]) == 0
+
+
 def test_cli_hook_failures_are_logged_and_swallowed(tmp_path, monkeypatch):
     """Make hook entrypoints fail closed from the agent's point of view.
 

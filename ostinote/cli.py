@@ -167,8 +167,12 @@ def _hook_main(argv: list[str]) -> int:
 
     Anything that goes wrong — handler exceptions, but also argparse errors
     such as a stale binary being fed an event name it doesn't know yet — is
-    appended to the hook error log and the process still exits 0.
+    appended to the hook error log and the process still exits 0. Hooks fired
+    by ostinote's own summarizer session (marked via its environment) do
+    nothing: memory for a temp directory is never wanted.
     """
+    if os.environ.get("OSTINOTE_SUMMARIZER"):
+        return 0
     parse_stderr = io.StringIO()
     try:
         with contextlib.redirect_stderr(parse_stderr):

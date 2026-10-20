@@ -155,6 +155,9 @@ def call_model(prompt: str, cfg: dict) -> ModelResult:
     # CLAUDE_EFFORT, inherited from the parent session, would override the
     # summarizer's low effort.
     env = {k: v for k, v in os.environ.items() if k not in ("CLAUDECODE", "CLAUDE_EFFORT")}
+    # The summarizer session fires the user's installed ostinote hooks in its
+    # temp cwd; this marker makes them return at once (cli._hook_main).
+    env["OSTINOTE_SUMMARIZER"] = "1"
 
     try:
         result = subprocess.run(

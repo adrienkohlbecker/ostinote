@@ -210,6 +210,8 @@ def test_call_model_strips_claudecode_from_child_env(monkeypatch):
     child_env = captured["kwargs"]["env"]
     assert "CLAUDECODE" not in child_env
     assert child_env["OSTINOTE_TEST_SENTINEL"] == "kept"
+    # Marks the child so the hooks it fires stay inert (see cli._hook_main).
+    assert child_env["OSTINOTE_SUMMARIZER"] == "1"
 
 
 def test_builtin_claude_summarizer_does_not_think(monkeypatch):
