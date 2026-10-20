@@ -29,6 +29,11 @@ DEFAULTS: dict = {
     "time_format": "24h",
     # Sessions started in a git worktree share the main checkout's memory.
     "share_worktrees": True,
+    # Byte budget for the memory injected at session start. Claude Code moves
+    # hook output past ~10 KB to a file and shows the model only a 2 KB
+    # preview, so the oldest archive.md weeks, then the oldest recent.md days,
+    # are left out until it fits. 0 disables the budget.
+    "inject_max_bytes": 8000,
     "debug": False,
     "cooldowns": {
         # Minimum seconds between saves of the same session.

@@ -105,9 +105,10 @@ def test_session_start_truncates_oversized_memory(tmp_path, monkeypatch, make_pr
     """Cap per-file memory injection so a runaway file cannot flood context.
 
     Expected: an oversized recent.md is injected tail-first with a truncation
-    marker, keeping the newest entries and dropping the oldest.
+    marker, keeping the newest entries and dropping the oldest. The byte
+    budget is disabled so the per-file cap is what gets exercised.
     """
-    env = make_project_env({"features": {"recovery": False, "consolidation": False}})
+    env = make_project_env({"features": {"recovery": False, "consolidation": False}, "inject_max_bytes": 0})
     env.ensure_dirs()
     body = "OLD-HEAD\n" + ("x" * 200_000) + "\nNEW-TAIL"
     (tmp_path / "data" / "recent.md").write_text(body, encoding="utf-8")
@@ -119,6 +120,75 @@ def test_session_start_truncates_oversized_memory(tmp_path, monkeypatch, make_pr
     assert "[earlier content truncated]" in out
     assert "NEW-TAIL" in out
     assert "OLD-HEAD" not in out
+
+
+def _seed_budget_memory(data):
+    """Seed memory whose injection is ~10.6 KB: ten 700-byte archive weeks, five 500-byte recent days."""
+    weeks = ["2026-07-%02d" % d for d in (6, 13, 20, 27)] + ["2026-08-%02d" % d for d in (3, 10, 17, 24, 31)]
+    weeks.append("2026-09-07")
+    # Newest-first, as models often write it: trimming must go by date, not position.
+    archive = "".join("## Week of %s\nWEEK-%s %s\n\n" % (w, w, "a" * 670) for w in reversed(weeks))
+    (data / "archive.md").write_text("# Archive\n\n" + archive, encoding="utf-8")
+    days = ["2026-09-%02d" % d for d in (14, 15, 16, 17, 18)]
+    recent = "".join("## %s\nDAY-%s %s\n\n" % (d, d, "r" * 470) for d in days)
+    (data / "recent.md").write_text("# Recent\n\n" + recent, encoding="utf-8")
+    (data / "core-memories.md").write_text("# Core Memories\n\n- 2026-01-01: CORE-FACT\n", encoding="utf-8")
+    (data / "now.md").write_text("## 10:00 | main\nNOW-ENTRY\n", encoding="utf-8")
+    return weeks, days
+
+
+def test_session_start_trims_archive_oldest_first_to_budget(tmp_path, monkeypatch, make_project_env, capsys):
+    """Keep the SessionStart injection under the configured byte budget.
+
+    Expected: Claude Code moves oversized hook output to a file and shows the
+    model only a short preview, so the injected block is trimmed to
+    `inject_max_bytes` by dropping the oldest archive weeks first (by date,
+    whatever their order in the file), with a marker saying entries were
+    omitted; recent, now, and core memory survive intact.
+    """
+    env = make_project_env({"features": {"recovery": False, "consolidation": False}, "inject_max_bytes": 6000})
+    env.ensure_dirs()
+    weeks, days = _seed_budget_memory(tmp_path / "data")
+    hook_stdin(monkeypatch, {"cwd": env.cwd})
+
+    hooks_mod.session_start("claude")
+
+    out = capsys.readouterr().out
+    assert len(out.rstrip("\n").encode("utf-8")) <= 6000
+    assert "WEEK-%s" % weeks[0] not in out
+    assert "WEEK-%s" % weeks[-1] in out
+    assert all("DAY-%s" % d in out for d in days)
+    assert "CORE-FACT" in out and "NOW-ENTRY" in out
+    assert "older section(s) omitted" in out
+
+
+def test_session_start_trims_recent_after_archive(tmp_path, monkeypatch, make_project_env, capsys):
+    """Once the archive is gone, trim recent.md oldest-first too."""
+    env = make_project_env({"features": {"recovery": False, "consolidation": False}, "inject_max_bytes": 2500})
+    env.ensure_dirs()
+    weeks, days = _seed_budget_memory(tmp_path / "data")
+    hook_stdin(monkeypatch, {"cwd": env.cwd})
+
+    hooks_mod.session_start("codex")
+
+    text = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
+    assert len(text.encode("utf-8")) <= 2500
+    assert not any("WEEK-%s" % w in text for w in weeks)
+    assert "DAY-%s" % days[0] not in text
+    assert "DAY-%s" % days[-1] in text
+    assert "CORE-FACT" in text and "NOW-ENTRY" in text
+
+
+def test_session_start_default_budget_fits_inline_hook_limit(tmp_path, monkeypatch, make_project_env, capsys):
+    """Default to a budget comfortably below Claude Code's ~10 KB inline limit."""
+    env = make_project_env({"features": {"recovery": False, "consolidation": False}})
+    env.ensure_dirs()
+    _seed_budget_memory(tmp_path / "data")
+    hook_stdin(monkeypatch, {"cwd": env.cwd})
+
+    hooks_mod.session_start("claude")
+
+    assert len(capsys.readouterr().out.rstrip("\n").encode("utf-8")) <= 8000
 
 
 def test_session_start_reads_only_memory_file_tail(tmp_path, monkeypatch, make_project_env, capsys):

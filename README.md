@@ -136,6 +136,7 @@ Optional. Create `~/.ostinote/config.json` (trusted user config, applies everywh
 | `timezone` | system local | IANA zone name (e.g. `America/New_York`) for timestamps and day boundaries |
 | `time_format` | `24h` | `24h` or `12h` timestamps |
 | `share_worktrees` | `true` | Sessions in git worktrees share the main checkout's memory |
+| `inject_max_bytes` | `8000` | Byte budget for memory injected at session start; oldest archive weeks, then oldest recent days, are left out to fit (`0` = no budget) |
 | `summarizer.engine` | auto | Trusted user-config-only choice of built-in summarizer: `claude`, `codex`, or auto (prefer claude, fall back to codex on codex-only machines) |
 | `summarizer.model` | per engine | Trusted user-config-only model for the built-in engine command (e.g. a cheap codex tier — codex model slugs rotate, so keep the pin here where it is easy to update) |
 | `summarizer.command` | per engine | Trusted user-config-only argv array for a summarizer that reads a prompt on stdin and prints a response; overrides `engine` and `model` |

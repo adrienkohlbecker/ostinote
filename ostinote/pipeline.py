@@ -473,6 +473,22 @@ def _archive_gaps(days: dict[date, list[str]], old_archive: str, new_recent: str
     return sorted(gaps)
 
 
+def drop_oldest_section(text: str) -> str | None:
+    """Remove the oldest dated ``## `` section of a memory file.
+
+    Goes by the header date, not file position, since models write archive
+    weeks in either order. Once no dated section is left, any remaining
+    content is dropped whole (returns ""); returns None when ``text`` has
+    nothing left to drop.
+    """
+    preamble, sections = _split_sections(text)
+    dated = [(day, i) for i, section in enumerate(sections) if (day := _section_day(section))]
+    if dated:
+        _, oldest = min(dated)
+        return preamble + "".join(section for i, section in enumerate(sections) if i != oldest)
+    return "" if text.strip() else None
+
+
 def _flatten(text: str) -> str:
     """One line of a day's text: header lines dropped, the rest joined by spaces."""
     lines = [ln.strip() for ln in text.splitlines()]
