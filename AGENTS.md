@@ -18,11 +18,7 @@ Treat this as infrastructure for agent memory: keep behavior predictable, preser
 ## Code Conventions
 
 - Keep changes small and behavior-focused; this project is intentionally a compact single-package CLI.
-- Preserve compatibility with existing on-disk memory formats and legacy config keys unless the user explicitly asks for a breaking migration.
-- Be careful around hook installers: validate config writes, avoid clobbering unrelated user hooks, and fail closed on malformed config.
 - When touching transcript parsing, state tracking, recovery, consolidation, or installer behavior, add or update regression tests in the relevant `tests/test_<area>.py` module.
-- Document functions with docstrings. Write them for an intermediate Python reader who has only surface-level knowledge of this tool: say what the function does, why its contract matters, and any non-obvious inputs, outputs, side effects, or failure modes.
-- Keep code comments sparse and useful. Add comments for non-obvious code paths, especially tricky concurrency, atomic-write, hook-shape, parsing, or compatibility logic; do not narrate obvious assignments.
 
 ## Verification
 
