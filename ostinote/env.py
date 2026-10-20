@@ -118,6 +118,17 @@ def _remember_worktree_root(worktree_root: str, root: str) -> None:
         os.replace(tmp, path)
 
 
+def adopt_removed_cwd(cwd: str, root: str) -> None:
+    """Record ``root`` for a deleted ``cwd`` that has no recorded root yet.
+
+    For callers that know which project a dead path belonged to (a session
+    state found in that project's memory) but recorded nothing while it
+    existed. An existing record wins.
+    """
+    if not os.path.isdir(cwd) and not _remembered_root(cwd):
+        _remember_worktree_root(cwd, root)
+
+
 def _remembered_root(cwd: str) -> str:
     """Return the recorded project root for a deleted worktree path, or "".
 

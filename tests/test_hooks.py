@@ -567,7 +567,9 @@ def _recovery_env(tmp_path):
     A full Env would drag in config loading and data-dir resolution that the
     recovery-selection tests don't exercise.
     """
-    stub = types.SimpleNamespace(sessions_dir=str(tmp_path / "sessions"), cwd=str(tmp_path), log=lambda *_args: None)
+    stub = types.SimpleNamespace(
+        sessions_dir=str(tmp_path / "sessions"), cwd=str(tmp_path), project_root=str(tmp_path), log=lambda *_args: None
+    )
     return cast(Env, stub)
 
 
@@ -616,6 +618,30 @@ def test_session_start_recovery_queues_forced_save(tmp_path, monkeypatch, make_p
         ]
     ]
     assert "remembered" in capsys.readouterr().out
+
+
+def test_recovery_of_removed_worktree_saves_into_this_project(tmp_path, monkeypatch, make_project_env, spawned):
+    """Recover a session whose worktree is gone into the memory that tracked it.
+
+    Expected: the state file lives in this project's sessions dir, so its
+    deleted cwd is recorded as belonging to this project's root; the queued
+    save keeps the original `--cwd`, and an Env built from it resolves here
+    instead of a slug of the dead path.
+    """
+    env = make_project_env({"data_dir": "~/.ostinote/projects/{slug}"})
+    env.ensure_dirs()
+    gone = str(tmp_path / "removed-worktree")
+    transcript = _recovery_transcript(env, name="gone.jsonl", age=hooks_mod._RECOVERY_ACTIVE_WINDOW + 1, cwd=gone)
+    state = SessionState.load(env.sessions_dir, "codex", "gone")
+    state.transcript_path = transcript
+    state.cwd = gone
+    state.save()
+
+    assert hooks_mod._recover_missed(env) == 1
+
+    assert spawned[0][spawned[0].index("--cwd") + 1] == gone
+    assert Env(gone).project_root == env.project_root
+    assert Env(gone).data_dir == env.data_dir
 
 
 @pytest.mark.parametrize(

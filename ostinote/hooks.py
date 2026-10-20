@@ -20,7 +20,7 @@ import sys
 import time
 
 from .agents import get_agent
-from .env import Env, open_regular_child
+from .env import Env, adopt_removed_cwd, open_regular_child
 from .pipeline import drop_oldest_section, staging_files
 from .state import SessionState, all_states
 
@@ -350,6 +350,11 @@ def _recover_missed(env: Env) -> int:
 
     candidates.sort(reverse=True, key=lambda pair: pair[0])
     for _, state in candidates[:_RECOVERY_MAX]:
+        # The state lives in this project's memory, so a session whose
+        # worktree has since been removed is saved here too; the save
+        # subprocess can no longer ask git where its cwd belonged.
+        if state.cwd:
+            adopt_removed_cwd(state.cwd, env.project_root)
         spawn(env, _save_args(state.agent, state.session_id, state.transcript_path, state.cwd or env.cwd, "--force"))
     return len(candidates[:_RECOVERY_MAX])
 
