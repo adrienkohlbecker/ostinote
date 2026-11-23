@@ -21,8 +21,8 @@ import time
 
 from .agents import get_agent
 from .env import Env, adopt_removed_cwd, open_regular_child
-from .pipeline import drop_oldest_section, staging_files
-from .state import SessionState, all_states
+from .pipeline import drop_oldest_section, flush_stale_buffer, staging_files
+from .state import PidLock, SessionState, all_states
 
 # Sessions whose transcript changed in the last N seconds are presumed live —
 # their own post-tool hook will save them; recovery leaves them alone.
@@ -235,6 +235,10 @@ def session_start(agent_name: str) -> None:
         if recovered:
             env.log("hook", "recovery: %d session(s) queued" % recovered)
 
+    # A project idle since a past day still holds that day's tail in now.md;
+    # file it under its day so this start's consolidation picks it up.
+    _flush_stale_buffer(env)
+
     # Consolidation of past-day staging files (silent — the agent can't act
     # on it, and session start is when injected context is already largest).
     if env.cfg["features"]["consolidation"] and staging_files(env):
@@ -290,6 +294,19 @@ def session_start(agent_name: str) -> None:
         )
 
     emit(agent_name, "SessionStart", text)
+
+
+def _flush_stale_buffer(env: Env) -> None:
+    """Run ``flush_stale_buffer`` if no save holds the lock (a save flushes too)."""
+    lock = PidLock(os.path.join(env.state_dir, "save.lock"))
+    if not lock.acquire():
+        return
+    try:
+        flush_stale_buffer(env, env.today())
+    except OSError as exc:
+        env.log("hook", "ERROR: cannot file stale now.md: %s" % exc)
+    finally:
+        lock.release()
 
 
 def _compose_injection(sections: list[str], memory: dict[str, str], omitted: dict[str, int]) -> str:

@@ -15,13 +15,13 @@ from __future__ import annotations
 import os
 import re
 import time
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
-from . import prompts, summarize
+from . import prompts, summarize, tzutil
 from .agents import get_agent
 from .agents.base import Message, TranscriptReadError
 from .env import Env
-from .state import PidLock, SessionState, read_ts, write_ts
+from .state import PidLock, SessionState, read_day, read_ts, write_day, write_ts
 
 _HEADER_RE = re.compile(r"^## ([0-9]{2}:[0-9]{2}|[0-9]{1,2}:[0-9]{2} (AM|PM)) \|")
 
@@ -108,7 +108,7 @@ def _save_locked(env: Env, agent, session_id: str, transcript_path: str, force: 
     # --- Extract ---
     env.log("extract", "%s session %s from line %d" % (agent.name, session_id, state.line))
     try:
-        messages, total_lines = agent.parse(transcript_path, skip_lines=state.line)
+        messages, total_lines, last_time = agent.read(transcript_path, skip_lines=state.line)
     except TranscriptReadError as exc:
         env.log("extract", "ERROR: %s" % exc)
         return 1
@@ -133,8 +133,13 @@ def _save_locked(env: Env, agent, session_id: str, transcript_path: str, force: 
         return 0
 
     # --- Summarize ---
+    # Date the entry by when the conversation happened, not by when this save
+    # runs: recovery and end-of-session saves can run days later.
+    today = env.today()
+    activity = tzutil.local(last_time, env.tz) if last_time else tzutil.now(env.tz)
+    entry_day = min(activity.strftime("%Y-%m-%d"), today)
     prompt = prompts.build_save_prompt(
-        time=env.time_now(),
+        time=tzutil.clock(activity, env.cfg["time_format"]),
         branch=env.git_branch(),
         last_entry=_last_entry(env.now_file),
         extract=extract,
@@ -176,21 +181,78 @@ def _save_locked(env: Env, agent, session_id: str, transcript_path: str, force: 
     if len(entry_lines) != 2:
         env.log("validate", "WARNING: entry has %d lines, expected 2" % len(entry_lines))
 
-    # --- Append to now.md ---
-    with open(env.now_file, "a", encoding="utf-8") as f:
-        f.write("\n" + text + "\n")
+    # --- File the entry under its day ---
+    flush_stale_buffer(env, today)
+    if entry_day < today:
+        _append_block(env.today_file(entry_day), text)
+        env.log("write", "filed under today-%s.md: %s (position → %d)" % (entry_day, entry_lines[0][:80], total_lines))
+    else:
+        with open(env.now_file, "a", encoding="utf-8") as f:
+            f.write("\n" + text + "\n")
+        write_day(_buffer_day_marker(env), today)
+        env.log("write", "appended: %s (position → %d)" % (entry_lines[0][:80], total_lines))
     state.last_save_ts = time.time()
     state.save()
-    env.log("write", "appended: %s (position → %d)" % (text.splitlines()[0][:80], total_lines))
 
     # --- Hourly compression (still under the save lock) ---
     if env.cfg["features"]["hourly_compression"]:
-        _maybe_compress(env)
+        _maybe_compress(env, today)
     return 0
 
 
-def _maybe_compress(env: Env) -> None:
-    """Compress now.md into today's daily file (upstream calls this NDC)."""
+def _buffer_day_marker(env: Env) -> str:
+    return os.path.join(env.state_dir, "now-day")
+
+
+def buffer_day(env: Env) -> str | None:
+    """Day (YYYY-MM-DD) the entries in now.md belong to; None when it is empty.
+
+    Read from the ``state/now-day`` marker each append writes. A now.md
+    written before the marker existed is dated by its mtime, the time of its
+    last append.
+    """
+    try:
+        with open(env.now_file, encoding="utf-8") as f:
+            if not f.read().strip():
+                return None
+        mtime = os.path.getmtime(env.now_file)
+    except OSError:
+        return None
+    return read_day(_buffer_day_marker(env)) or datetime.fromtimestamp(mtime, env.tz).strftime("%Y-%m-%d")
+
+
+def flush_stale_buffer(env: Env, today: str) -> str | None:
+    """Move a past day's now.md verbatim into that day's ``today-*.md``.
+
+    now.md only ever holds one day: entries saved after that day's last
+    hourly compression would otherwise wait for the project's next save and
+    be compressed into whatever day that falls on. No model call, so it is
+    cheap enough for session start. The caller holds the save lock. Returns
+    the day moved, or None when now.md is empty or still today's.
+    """
+    day = buffer_day(env)
+    if not day or day >= today:
+        return None
+    with open(env.now_file, encoding="utf-8") as f:
+        content = f.read()
+    _append_block(env.today_file(day), content.strip())
+    # Truncate only after the content is safely in the day file.
+    with open(env.now_file, "w", encoding="utf-8") as f:
+        f.write("")
+    env.log("compress", "now.md from %s → today-%s.md (verbatim)" % (day, day))
+    return day
+
+
+def _append_block(path: str, text: str) -> None:
+    """Append ``text`` to a daily file, blank-line separated from what is there."""
+    with open(path, "a", encoding="utf-8") as f:
+        if os.path.exists(path) and os.path.getsize(path):
+            f.write("\n")
+        f.write(text + "\n")
+
+
+def _maybe_compress(env: Env, today: str) -> None:
+    """Compress now.md (today's entries) into today's daily file (upstream calls this NDC)."""
     marker = os.path.join(env.state_dir, "last-compress.ts")
     if time.time() - read_ts(marker) < env.cfg["cooldowns"]["compress_seconds"]:
         return
@@ -203,7 +265,7 @@ def _maybe_compress(env: Env) -> None:
         return
 
     write_ts(marker)
-    env.log("compress", "now.md → today-%s.md" % env.today())
+    env.log("compress", "now.md → today-%s.md" % today)
     try:
         result = summarize.call_model(prompts.build_compress_prompt(now_content), env.cfg)
     except RuntimeError as e:
@@ -214,11 +276,7 @@ def _maybe_compress(env: Env) -> None:
         env.log("compress", "ERROR: produced empty result")
         return
 
-    today_file = env.today_file()
-    with open(today_file, "a", encoding="utf-8") as f:
-        if os.path.getsize(today_file) if os.path.exists(today_file) else 0:
-            f.write("\n")
-        f.write(text + "\n")
+    _append_block(env.today_file(today), text)
     # Truncate the buffer — its content now lives in today-*.md.
     with open(env.now_file, "w", encoding="utf-8") as f:
         f.write("")
@@ -352,7 +410,7 @@ def run_consolidation(env: Env) -> int:
 
         for path in staging:
             if os.path.exists(path):
-                os.replace(path, path[:-3] + ".done.md")
+                _mark_done(path)
         env.log("consolidation", "done: %d file(s) consolidated" % len(staging))
         return 0
     finally:
@@ -618,6 +676,21 @@ def _strip_fences(text: str) -> str:
     """
     lines = [ln for ln in text.strip().splitlines() if not _FENCE_RE.match(ln.strip())]
     return "\n".join(lines).strip()
+
+
+def _mark_done(path: str) -> None:
+    """Rename a consumed ``today-*.md`` to ``.done.md``, merging into an existing one.
+
+    A late save can reopen a day that was already consolidated; its earlier
+    ``.done.md`` keeps the day's verbatim history, so it is appended to, not
+    replaced.
+    """
+    done = path[:-3] + ".done.md"
+    if not os.path.exists(done):
+        os.replace(path, done)
+        return
+    _append_block(done, _read_or_empty(path).strip())
+    os.remove(path)
 
 
 def _read_or_empty(path: str) -> str:

@@ -101,6 +101,27 @@ def test_session_start_queues_consolidation_without_injecting_on_resume(
     assert capsys.readouterr().out == ""
 
 
+def test_session_start_files_a_past_days_buffer_before_consolidating(tmp_path, monkeypatch, make_project_env, spawned):
+    """File an idle project's leftover now.md under its own day at session start.
+
+    Expected: entries a past day left in now.md move verbatim to that day's
+    `today-*.md`, which this start then queues for consolidation, instead of
+    waiting for the next save to compress them into the day it runs.
+    """
+    env = make_project_env({"features": {"recovery": False}})
+    env.ensure_dirs()
+    data = tmp_path / "data"
+    (data / "now.md").write_text("\n## 23:08 | main\nLate evening fix\n", encoding="utf-8")
+    (data / "state" / "now-day").write_text("2000-01-01", encoding="utf-8")
+    hook_stdin(monkeypatch, {"cwd": env.cwd, "source": "resume"})
+
+    hooks_mod.session_start("claude")
+
+    assert (data / "today-2000-01-01.md").read_text(encoding="utf-8") == "## 23:08 | main\nLate evening fix\n"
+    assert (data / "now.md").read_text(encoding="utf-8") == ""
+    assert spawned == [["consolidate", "--cwd", env.cwd]]
+
+
 def test_session_start_truncates_oversized_memory(tmp_path, monkeypatch, make_project_env, capsys):
     """Cap per-file memory injection so a runaway file cannot flood context.
 

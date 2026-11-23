@@ -31,9 +31,13 @@ def today_str(tz: ZoneInfo | None) -> str:
     return now(tz).strftime("%Y-%m-%d")
 
 
-def time_str(tz: ZoneInfo | None, time_format: str = "24h") -> str:
-    """Return the current time as ``HH:MM`` (24h) or ``H:MM AM/PM`` (12h)."""
+def clock(moment: datetime.datetime, time_format: str = "24h") -> str:
+    """Format ``moment`` as ``HH:MM`` (24h) or ``H:MM AM/PM`` (12h)."""
     if time_format == "12h":
-        s = now(tz).strftime("%I:%M %p")
-        return s.lstrip("0")
-    return now(tz).strftime("%H:%M")
+        return moment.strftime("%I:%M %p").lstrip("0")
+    return moment.strftime("%H:%M")
+
+
+def local(moment: datetime.datetime, tz: ZoneInfo | None) -> datetime.datetime:
+    """Convert an aware ``moment`` to ``tz``, or to the system local zone when tz is None."""
+    return moment.astimezone(tz)

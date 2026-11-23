@@ -209,6 +209,23 @@ def read_ts(path: str) -> float:
         return 0.0
 
 
+def read_day(path: str) -> str:
+    """Read a ``YYYY-MM-DD`` marker file; "" if missing or malformed."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            day = f.read().strip()
+    except OSError:
+        return ""
+    return day if re.fullmatch(r"\d{4}-\d{2}-\d{2}", day) else ""
+
+
+def write_day(path: str, day: str) -> None:
+    """Write a ``YYYY-MM-DD`` marker file, creating parent dirs."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(day)
+
+
 def write_ts(path: str) -> None:
     """Write the current Unix time to a marker file, creating parent dirs."""
     os.makedirs(os.path.dirname(path), exist_ok=True)

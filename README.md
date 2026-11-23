@@ -72,7 +72,7 @@ The mental model is simple:
 
 1. **Capture:** hooks notice when a Claude Code or Codex transcript has enough new conversation.
 2. **Summarize:** a detached background process asks the summarizer for a concise entry and appends it to `now.md`.
-3. **Compress:** periodic jobs merge `now.md` into `today-YYYY-MM-DD.md`, then older days into `recent.md` and `archive.md`.
+3. **Compress:** periodic jobs merge `now.md` into `today-YYYY-MM-DD.md`, then older days into `recent.md` and `archive.md`. Entries are dated by the transcript's own timestamps, so a save that runs days later (recovery of a crashed session, a project idle since its last session) still lands on the day the work happened.
 4. **Inject:** fresh sessions receive a `=== MEMORY ===` block assembled from the useful layers.
 
 Both agents use the same storage, locks, cooldowns, recovery logic, and consolidation pipeline. Parallel sessions are safe: each session tracks its own transcript position, shared writes are serialized by a lock, and git worktrees share the main checkout's memory by default (`share_worktrees`). Each worktree's resolved root is recorded under `~/.ostinote/worktree-roots/`, so a save that runs after the worktree is removed still lands in the shared memory.

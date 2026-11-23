@@ -1,6 +1,8 @@
 import builtins
+import json
 import os
 import time
+from datetime import UTC, datetime
 
 import pytest
 
@@ -240,6 +242,108 @@ def test_run_save_failed_compression_preserves_now(tmp_path, monkeypatch, make_p
 
     assert (tmp_path / "data" / "now.md").read_text(encoding="utf-8") == "\n## 11:00 | main\nCaptured thing\n"
     assert not (tmp_path / "data" / ("today-%s.md" % today)).exists()
+
+
+def _stamped(line, timestamp):
+    """A transcript line with the ISO ``timestamp`` both agents record on every line."""
+    obj = json.loads(line)
+    obj["timestamp"] = timestamp
+    return json.dumps(obj)
+
+
+def test_run_save_dates_a_late_save_by_its_transcript(tmp_path, monkeypatch, make_project_env):
+    """Date an entry by when its conversation happened, not when the save ran.
+
+    Recovery and end-of-session saves can run days after the work. Expected:
+    the header time given to the model comes from the transcript timestamps,
+    and the entry is filed straight into that day's `today-*.md` instead of
+    today's buffer, where it would be compressed into the wrong day.
+    """
+    env = make_project_env({"timezone": "UTC"})
+    monkeypatch.setattr(env, "today", lambda: "2026-11-16")
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(
+        _stamped(codex_user("Fix the purifier"), "2026-11-12T21:40:00.000Z")
+        + "\n"
+        + _stamped(codex_assistant("Fixed."), "2026-11-12T21:47:30.000Z")
+        + "\n",
+        encoding="utf-8",
+    )
+    prompts_seen = []
+    monkeypatch.setattr(
+        pipeline_mod.summarize,
+        "call_model",
+        lambda prompt, _cfg: prompts_seen.append(prompt) or model_result("## 21:47 | main\nFixed the purifier"),
+    )
+
+    assert pipeline_mod.run_save(env, "codex", "s1", str(transcript), force=True) == 0
+
+    assert "## 21:47 | " in prompts_seen[0]
+    data = tmp_path / "data"
+    assert (data / "today-2026-11-12.md").read_text(encoding="utf-8") == "## 21:47 | main\nFixed the purifier\n"
+    assert not (data / "now.md").exists()
+    assert SessionState.load(env.sessions_dir, "codex", "s1").line == 2
+
+
+@pytest.mark.parametrize("dated_by", ["marker", "mtime"])
+def test_run_save_files_a_past_days_buffer_under_that_day(tmp_path, monkeypatch, make_project_env, dated_by):
+    """Keep entries left in now.md after a day's last compression on that day.
+
+    The hourly compression cooldown leaves the evening's last entries in
+    now.md until the project's next save, possibly weeks later. Expected:
+    that save moves them verbatim into their own day's file before
+    compressing, so only today's entries reach today's file. A buffer written
+    before the day marker existed is dated by its mtime.
+    """
+    env = make_project_env({"timezone": "UTC", "features": {"hourly_compression": True}})
+    monkeypatch.setattr(env, "today", lambda: "2026-11-12")
+    env.ensure_dirs()
+    data = tmp_path / "data"
+    now_md = data / "now.md"
+    now_md.write_text("\n## 12:03 | master\nRestarted RC servers\n", encoding="utf-8")
+    if dated_by == "marker":
+        (data / "state" / "now-day").write_text("2026-11-01", encoding="utf-8")
+    else:
+        stamp = datetime(2026, 11, 1, 12, 3, tzinfo=UTC).timestamp()
+        os.utime(now_md, (stamp, stamp))
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(_stamped(codex_user("Migrate to Keka"), "2026-11-12T10:44:00Z") + "\n", encoding="utf-8")
+    responses = iter([model_result("## 10:44 | master\nKeka migration"), model_result("## 10:44 | master\nKeka")])
+    prompts_seen = []
+    monkeypatch.setattr(
+        pipeline_mod.summarize, "call_model", lambda prompt, _cfg: prompts_seen.append(prompt) or next(responses)
+    )
+
+    assert pipeline_mod.run_save(env, "codex", "s1", str(transcript)) == 0
+
+    assert (data / "today-2026-11-01.md").read_text(encoding="utf-8") == "## 12:03 | master\nRestarted RC servers\n"
+    assert "Restarted RC servers" not in prompts_seen[1]
+    assert (data / "today-2026-11-12.md").read_text(encoding="utf-8") == "## 10:44 | master\nKeka\n"
+    assert now_md.read_text(encoding="utf-8") == ""
+
+
+def test_run_consolidation_merges_a_reopened_day_into_its_done_file(tmp_path, monkeypatch, make_project_env):
+    """Keep a consolidated day's history when a late save reopens that day.
+
+    Expected: the new `today-*.md` is consolidated like any other staging
+    file and then appended to the existing `.done.md` rather than replacing
+    it, so the day's earlier verbatim entries survive.
+    """
+    env = make_project_env()
+    monkeypatch.setattr(env, "today", lambda: "2026-06-12")
+    staging = _seed_consolidation(tmp_path, env)
+    done = tmp_path / "data" / "today-2000-01-01.done.md"
+    done.write_text("## earlier\nB\n", encoding="utf-8")
+    monkeypatch.setattr(
+        pipeline_mod.summarize,
+        "call_model",
+        lambda _prompt, _cfg: model_result("===RECENT===\n# Recent\n\n## 2000-01-01\nA B\n===ARCHIVE===\n# Archive\n"),
+    )
+
+    assert pipeline_mod.run_consolidation(env) == 0
+
+    assert not staging.exists()
+    assert done.read_text(encoding="utf-8") == "## earlier\nB\n\n## old\nA\n"
 
 
 def test_run_consolidation_writes_sections_and_marks_staging_done(tmp_path, monkeypatch, make_project_env):

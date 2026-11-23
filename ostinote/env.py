@@ -392,10 +392,6 @@ class Env:
         """Return today's date as YYYY-MM-DD in the configured timezone."""
         return tzutil.today_str(self.tz)
 
-    def time_now(self) -> str:
-        """Return the current clock time formatted per the ``time_format`` config."""
-        return tzutil.time_str(self.tz, self.cfg["time_format"])
-
     # --- logging ---------------------------------------------------------------
 
     def log(self, component: str, message: str) -> None:
