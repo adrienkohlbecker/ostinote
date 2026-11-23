@@ -1,6 +1,9 @@
 import os
 
+import pytest
+
 from ostinote.state import PidLock, SessionState
+from tests.helpers import age_file
 
 
 def test_session_state_roundtrip(tmp_path):
@@ -99,7 +102,22 @@ def test_pid_lock_steals_garbage_content(tmp_path):
     path = str(tmp_path / "x.lock")
     with open(path, "w") as f:
         f.write("not-a-pid")
+    age_file(path, 60)
     assert PidLock(path).acquire()
+
+
+@pytest.mark.parametrize("content", ["", "not-a-pid"])
+def test_pid_lock_respects_a_lock_still_being_written(tmp_path, content):
+    """Leave a just-created lock alone until its holder has written its pid.
+
+    Expected: the holder creates the file and writes its pid in two steps, so
+    a fresh lock without a readable pid belongs to a live holder; stealing it
+    would let two saves run at once.
+    """
+    path = str(tmp_path / "x.lock")
+    with open(path, "w") as f:
+        f.write(content)
+    assert not PidLock(path).acquire()
 
 
 def test_pid_lock_does_not_steal_from_live_process(tmp_path):

@@ -110,6 +110,9 @@ def all_states(sessions_dir: str) -> list[SessionState]:
     return states
 
 
+_UNWRITTEN_LOCK_GRACE_SECONDS = 10
+
+
 class PidLock:
     """Atomic create-or-fail lock; stale locks (dead pid) are taken over."""
 
@@ -123,7 +126,9 @@ class PidLock:
 
         Creation is atomic (``O_CREAT | O_EXCL``). If the file already exists
         but its pid is dead, the stale lock is removed and acquisition retried
-        once; a live holder makes this return False immediately.
+        once; a live holder makes this return False immediately. A file
+        without a readable pid is stale only after a short grace period,
+        since its holder may not have written the pid yet.
         """
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
         for _ in range(2):
@@ -146,11 +151,21 @@ class PidLock:
             pid = 0
         if pid and _pid_alive(pid):
             return False
+        # The holder creates the file before writing its pid, so a lock with
+        # no readable pid counts as abandoned only once it has stayed so.
+        if not pid and not self._older_than(_UNWRITTEN_LOCK_GRACE_SECONDS):
+            return False
         try:
             os.remove(self.path)
         except OSError:
             pass
         return True
+
+    def _older_than(self, seconds: float) -> bool:
+        try:
+            return time.time() - os.path.getmtime(self.path) > seconds
+        except OSError:
+            return True  # already removed: nothing left to wait for
 
     def release(self) -> None:
         """Drop the lock if this instance holds it; safe to call repeatedly."""
