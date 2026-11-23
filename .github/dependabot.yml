@@ -1,10 +1,17 @@
 version: 2
+
+# One pull request per run covering every ecosystem below.
+multi-ecosystem-groups:
+  dependencies:
+    schedule:
+      interval: monthly
+
 updates:
   - package-ecosystem: github-actions
     directory: /
-    schedule:
-      interval: monthly
+    patterns: ["*"]
+    multi-ecosystem-group: dependencies
   - package-ecosystem: uv
     directory: /
-    schedule:
-      interval: monthly
+    patterns: ["*"]
+    multi-ecosystem-group: dependencies
