@@ -2,6 +2,7 @@ import json
 import os
 import re
 import time
+from datetime import UTC, datetime
 
 import pytest
 
@@ -86,6 +87,31 @@ def test_claude_parse(claude_transcript):
     assert "[TOOL: Read auth.py]" in agent_text
     assert "[TOOL: Bash `pytest -x tests/`]" in agent_text
     assert messages[2] == ("AGENT", "[TOOL_RESULT: big output]")
+
+
+def test_read_reports_when_the_new_conversation_happened(tmp_path):
+    """Report the newest timestamp of the lines read past the resume offset.
+
+    Expected: only lines that contribute messages count (a later metadata
+    line is not conversation), lines before `skip_lines` are ignored, and a
+    transcript without timestamps yields None.
+    """
+    lines = [
+        {"type": "user", "timestamp": "2026-11-01T11:00:00Z", "message": {"content": "old"}},
+        {"type": "user", "timestamp": "2026-11-12T12:50:00.123Z", "message": {"content": "new"}},
+        {"type": "assistant", "timestamp": "2026-11-12T12:53:00Z", "message": {"content": "done"}},
+        {"type": "last-prompt", "timestamp": "2026-11-14T16:50:00Z"},
+    ]
+    path = tmp_path / "session.jsonl"
+    path.write_text("\n".join(json.dumps(line) for line in lines) + "\n", encoding="utf-8")
+
+    extract = ClaudeAgent().read(str(path), skip_lines=1)
+
+    assert extract.messages == [("HUMAN", "new"), ("AGENT", "done")]
+    assert extract.total_lines == 4
+    assert extract.last_time == datetime(2026, 11, 12, 12, 53, tzinfo=UTC)
+    path.write_text(claude_line("user", "untimed") + "\n", encoding="utf-8")
+    assert ClaudeAgent().read(str(path)).last_time is None
 
 
 def test_parse_skips_malformed_lines(tmp_path, capsys):
