@@ -52,15 +52,47 @@ def read_hook_input() -> tuple[dict, str]:
     return data, ""
 
 
-def env_from_hook(data: dict) -> Env:
+def env_from_hook(data: dict, agent_name: str) -> Env:
     """Build the project Env from the hook payload's working directory.
 
     Prefers the ``cwd`` the agent reported, then ``CLAUDE_PROJECT_DIR``, then
     the process cwd — the chosen directory determines the project slug, and
     with it which memory directory all subsequent work reads and writes.
+    The reported cwd follows the session's shell, so when the payload's
+    transcript does not belong to it, the directory it does belong to wins
+    (see ``_session_cwd``).
     """
-    cwd = _string_field(data, "cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
-    return Env(cwd)
+    project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "")
+    cwd = _string_field(data, "cwd")
+    if cwd:
+        cwd = _session_cwd(agent_name, _string_field(data, "transcript_path"), cwd, project_dir)
+    return Env(cwd or project_dir or os.getcwd())
+
+
+def _session_cwd(agent_name: str, transcript_path: str, cwd: str, project_dir: str) -> str:
+    """Return the directory the session's transcript belongs to, or ``cwd``.
+
+    A session that cds into a subdirectory, or through a symlink into another
+    tree, reports that directory, while its transcript stays filed under the
+    directory it started in. Tries ``cwd``, its ancestors, then the agent's
+    project dir; the agent's provenance check picks the first that owns the
+    transcript. Without a transcript, or when none owns it, ``cwd`` stands
+    and the transcript is rejected later as before.
+    """
+    if not transcript_path or not os.path.isfile(transcript_path):
+        return cwd
+    agent = get_agent(agent_name)
+    candidates = []
+    path = os.path.abspath(cwd)
+    while path not in candidates:
+        candidates.append(path)
+        path = os.path.dirname(path)
+    if project_dir:
+        candidates.append(os.path.abspath(project_dir))
+    for candidate in candidates:
+        if agent.accepts_transcript_path(transcript_path, candidate):
+            return candidate
+    return cwd
 
 
 def self_command() -> list[str]:
@@ -221,7 +253,7 @@ def session_start(agent_name: str) -> None:
     background work but no injection — they already saw the memory once.
     """
     data, input_err = read_hook_input()
-    env = env_from_hook(data)
+    env = env_from_hook(data, agent_name)
     env.ensure_dirs()
     if input_err:
         env.log("hook", input_err)
@@ -389,7 +421,7 @@ def session_end(agent_name: str) -> None:
     exchanges.
     """
     data, input_err = read_hook_input()
-    env = env_from_hook(data)
+    env = env_from_hook(data, agent_name)
     if input_err:
         env.log("hook", input_err)
 
@@ -417,7 +449,7 @@ def post_tool(agent_name: str) -> None:
     delta and the per-session cooldown allows it. Prints nothing.
     """
     data, input_err = read_hook_input()
-    env = env_from_hook(data)
+    env = env_from_hook(data, agent_name)
     if input_err:
         env.log("hook", input_err)
 

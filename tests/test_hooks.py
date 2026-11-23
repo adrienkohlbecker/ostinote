@@ -427,6 +427,55 @@ def test_post_tool_rejects_transcript_from_another_claude_project(tmp_path, monk
     assert not os.path.exists(env.sessions_dir) or os.listdir(env.sessions_dir) == []
 
 
+def _slugged_project_env(tmp_path, make_project_env):
+    """Project env whose memory lives in a per-project directory, as by default."""
+    return make_project_env({"data_dir": str(tmp_path / "data" / "{slug}")})
+
+
+def test_post_tool_files_a_session_moved_into_a_subdirectory_under_its_project(
+    tmp_path, monkeypatch, make_project_env, spawned
+):
+    """Keep a Claude session's memory in its project after it cds into a subdirectory.
+
+    Expected: the hook payload's cwd follows the session's shell, but the
+    transcript still belongs to the directory the session started in; the
+    save is queued for that project and no memory directory appears for the
+    subdirectory.
+    """
+    env = _slugged_project_env(tmp_path, make_project_env)
+    transcript = _claude_hook_transcript(env, "s1.jsonl", ["{}", "{}"])
+    subdir = os.path.join(env.cwd, "docs")
+    os.mkdir(subdir)
+    hook_stdin(monkeypatch, {"cwd": subdir, "transcript_path": transcript, "session_id": "s1"})
+
+    hooks_mod.post_tool("claude")
+
+    assert [args[args.index("--cwd") + 1] for args in spawned] == [env.cwd]
+    assert sorted(os.listdir(tmp_path / "data")) == [os.path.basename(env.data_dir)]
+
+
+def test_post_tool_files_a_session_moved_out_of_its_project_under_the_project_dir(
+    tmp_path, monkeypatch, make_project_env, spawned
+):
+    """Use the agent's project dir when the session's shell left the project tree.
+
+    Expected: a session that cds through a symlink into another directory
+    reports that directory as its cwd; Claude's ``CLAUDE_PROJECT_DIR`` still
+    names the directory the transcript belongs to, so the save goes there.
+    """
+    env = _slugged_project_env(tmp_path, make_project_env)
+    transcript = _claude_hook_transcript(env, "s1.jsonl", ["{}", "{}"])
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", env.cwd)
+    hook_stdin(monkeypatch, {"cwd": str(elsewhere), "transcript_path": transcript, "session_id": "s1"})
+
+    hooks_mod.post_tool("claude")
+
+    assert [args[args.index("--cwd") + 1] for args in spawned] == [env.cwd]
+    assert sorted(os.listdir(tmp_path / "data")) == [os.path.basename(env.data_dir)]
+
+
 def test_malformed_hook_input_is_logged(tmp_path, monkeypatch, make_project_env):
     """Record undecodable hook payloads instead of failing silently.
 
